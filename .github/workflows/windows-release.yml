@@ -1,0 +1,90 @@
+name: Windows installer
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-windows-build.txt
+
+      - name: Run application tests
+        run: python -m unittest discover -s tests -p test_storage_providers.py -v
+
+      - name: Build Linux source package
+        run: python scripts/package.py
+
+      - name: Download FFmpeg runtime
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'ffmpeg.zip'
+          $extract = Join-Path $env:RUNNER_TEMP 'ffmpeg'
+          Invoke-WebRequest 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip' -OutFile $archive
+          $downloadHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
+          "FFmpeg archive SHA-256: $downloadHash" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          Expand-Archive -LiteralPath $archive -DestinationPath $extract -Force
+          $ffmpeg = Get-ChildItem -LiteralPath $extract -Filter ffmpeg.exe -Recurse | Select-Object -First 1
+          if (-not $ffmpeg) { throw 'FFmpeg binary was not found in downloaded archive.' }
+          New-Item -ItemType Directory -Force -Path 'build/ffmpeg' | Out-Null
+          Copy-Item $ffmpeg.FullName 'build/ffmpeg/ffmpeg.exe'
+          $version = (& $ffmpeg.FullName -version | Select-Object -First 1)
+          "FFmpeg runtime: $version" | Out-File -FilePath 'build/ffmpeg/FFMPEG-NOTICE.txt' -Encoding utf8
+          'This essentials build is provided by Gyan. Review the exact build configuration, license, and corresponding source at https://www.gyan.dev/ffmpeg/builds/ and https://ffmpeg.org/legal.html before redistribution.' | Out-File -FilePath 'build/ffmpeg/FFMPEG-NOTICE.txt' -Append -Encoding utf8
+
+      - name: Build self-contained application
+        run: pyinstaller --noconfirm --clean --distpath build/pyinstaller --workpath build/work TimelapseManager.spec
+
+      - name: Add FFmpeg runtime to application bundle
+        shell: pwsh
+        run: |
+          Copy-Item 'build/ffmpeg/ffmpeg.exe' 'build/pyinstaller/TimelapseManager/ffmpeg.exe'
+          Copy-Item 'build/ffmpeg/FFMPEG-NOTICE.txt' 'build/pyinstaller/TimelapseManager/FFMPEG-NOTICE.txt'
+
+      - name: Install Inno Setup
+        run: choco install innosetup --yes --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { (Get-Content VERSION -Raw).Trim() }
+          $compiler = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'
+          if (-not (Test-Path $compiler)) { throw 'Inno Setup compiler was not found.' }
+          & $compiler "/DAppVersion=$version" 'scripts/windows-installer.iss'
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit code $LASTEXITCODE" }
+          New-Item -ItemType Directory -Force -Path build/release | Out-Null
+          Move-Item "build/installer/TimelapseManager-Setup-$version.exe" build/release/
+          Copy-Item "dist/timelapse-manager-$((Get-Content VERSION -Raw).Trim()).zip" build/release/
+          Get-ChildItem build/release -File | ForEach-Object {
+            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+            "$hash  $($_.Name)"
+          } | Set-Content build/release/SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: build/release/*
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $assets = Get-ChildItem build/release -File | ForEach-Object { $_.FullName }
+          & gh release create $env:GITHUB_REF_NAME @assets --title "Timelapse Manager $env:GITHUB_REF_NAME" --generate-notes

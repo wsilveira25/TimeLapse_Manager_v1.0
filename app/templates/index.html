@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Timelapse Manager</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+    <style>
+        /* Custom styles for form text */
+        .form-text { color:#444a50; } /* Custom color for form text */
+    </style>
+</head>
+
+
+<body class="app-shell" data-accent="cyan" data-background="deep-blue" data-admin="{{ 'true' if is_admin else 'false' }}" data-username="{{ username }}">
+    <!-- TELA DE CARREGAMENTO (BLUR) -->
+    <div id="loading-overlay" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(248, 249, 250, 0.85); backdrop-filter: blur(10px); z-index: 9999; display: flex; flex-direction: column; justify-content: center; align-items: center; transition: opacity 0.4s ease;">
+        <div class="spinner-border text-primary mb-3" style="width: 3.5rem; height: 3.5rem; border-width: 0.3rem;" role="status"></div>
+        <h4 class="text-dark fw-bold shadow-sm" style="letter-spacing: 1px;">A INICIAR SISTEMA</h4>
+        <p class="text-muted fw-semibold">A sincronizar câmaras e discos...</p>
+    </div>
+    <!-- BARRA DE NAVEGAÇÃO -->
+    <nav class="navbar navbar-dark bg-dark shadow-sm">
+        <div class="container">
+            <a class="navbar-brand" href="#"><i class="fa-solid fa-camera-retro me-2"></i> Timelapse Manager</a>
+            <div class="d-flex align-items-center gap-2 ms-auto">
+                <button class="btn btn-sm btn-outline-light" type="button" data-bs-toggle="modal" data-bs-target="#modalSettings" aria-label="Abrir configurações" title="Configurações">
+                    <i class="fa-solid fa-sliders"></i>
+                </button>
+                <form action="/logout" method="post">
+                    <button class="btn btn-sm btn-outline-light" type="submit" title="Sair da sessão">
+                        <i class="fa-solid fa-arrow-right-from-bracket me-1"></i><span class="d-none d-sm-inline">Sair</span>
+                    </button>
+                </form>
+            </div>
+        </div>
+    </nav>
+
+    <!-- CONTEÚDO PRINCIPAL (Tudo deve estar dentro desta div container) -->
+    <div class="container mt-4">
+        
+       <!-- PAINEL DE ARMAZENAMENTO -->
+        <!-- DASHBOARD DE ARMAZENAMENTO (Grelha 2/3 + 1/3) -->
+        <div class="row mb-5">
+            
+            <!-- PAINEL LOCAL (Ocupa 8 colunas em ecrãs grandes) -->
+            <div class="col-lg-8 mb-3 mb-lg-0">
+                <div class="card h-100 border-0" style="background: linear-gradient(145deg, #1e2532, #141923); border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.3);">
+                    <div class="card-body p-4 text-white">
+                        <div class="d-flex align-items-center mb-4">
+                            <div class="bg-info bg-opacity-25 p-3 rounded-3 me-3" style="box-shadow: 0 0 15px rgba(0, 210, 255, 0.2);">
+                                <i class="fa-solid fa-hard-drive fa-2x text-info"></i>
+                            </div>
+                            <div>
+                                <h5 class="mb-0 fw-bold text-white" style="letter-spacing: 1px;">ARMAZENAMENTO LOCAL DO SISTEMA</h5>
+                                <p class="mb-0 text-light opacity-75" id="disco-resumo" style="font-size: 0.9rem;">Total: A calcular... / Livre: A calcular...</p>
+                                <div id="disco-alerta" class="alert py-2 small mt-2 mb-0 d-none text-start" role="status"></div>
+                            </div>
+                        </div>
+
+                        <div class="row g-4 mt-2">
+                            <!-- Bloco do Disco -->
+                            <div class="col-md-6">
+                                <div class="p-3 rounded h-100" style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1);">
+                                    <p class="text-uppercase fw-bold text-white mb-3" style="font-size: 0.85rem; letter-spacing: 0.5px;">Disco Principal (/var/temp)</p>
+                                    
+                                    <div class="progress" style="height: 38px; background: rgba(0,0,0,0.4); border-radius: 8px; border: 1px solid rgba(255,255,255,0.1);">
+                                        <div id="disco-barra" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" 
+                                             style="min-width: 5%; width: 0%; background: linear-gradient(90deg, #00d2ff 0%, #3a7bd5 100%); font-weight: bold; font-size: 0.9rem; text-shadow: 1px 1px 2px rgba(0,0,0,0.8); box-shadow: 0 0 15px rgba(0, 210, 255, 0.6);">
+                                            A calcular...
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Bloco de Cálculo Prévio -->
+                            <div class="col-md-6">
+                                <div class="p-3 rounded h-100" style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1);">
+                                    <p id="texto-media-kb" class="text-uppercase fw-bold text-white mb-3" style="font-size: 0.85rem; letter-spacing: 0.5px;">Cálculo Prévio (Média: ...)</p>
+                                    
+                                    <div class="d-flex justify-content-between mb-2 pb-2 border-bottom border-secondary border-opacity-25">
+                                        <span class="text-light">Total de Capturas (Frames):</span>
+                                        <span class="fw-bold text-white" id="prev-total">0</span>
+                                    </div>
+                                    <div class="d-flex justify-content-between mb-2 pb-2 border-bottom border-secondary border-opacity-25">
+                                        <span class="text-info">Capturas Realizadas:</span>
+                                        <span class="fw-bold text-info" id="prev-realizadas">0</span>
+                                    </div>
+                                    <div class="d-flex justify-content-between pt-1">
+                                        <span class="text-success">Capturas Restantes:</span>
+                                        <span class="fw-bold text-success" id="prev-restantes">0</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PAINEL DE NUVEM (Ocupa as 4 colunas restantes - Espaço reservado para a Fase 2) -->
+            <!-- PAINEL DE NUVEM -->
+            <div class="col-lg-4 mb-3 mb-lg-0">
+                <div class="card h-100 border-0" style="background: linear-gradient(145deg, #2a3140, #1e2532); border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.2);">
+                    <div class="card-body p-4 text-white d-flex flex-column justify-content-center align-items-center text-center">
+                        <div class="bg-primary bg-opacity-25 p-3 rounded-circle mb-3" id="icon-nuvem-status" style="border: 1px solid rgba(255,255,255,0.2);">
+                            <i class="fa-solid fa-server fa-2x text-primary"></i>
+                        </div>
+                        <h5 class="fw-bold text-white mb-1" id="nuvem-titulo">Nuvem Não Configurada</h5>
+                        <p class="text-muted small mb-3" id="nuvem-desc">Configure um servidor TrueNAS ou Nextcloud para backup e limpeza local.</p>
+                        
+                        <div class="d-flex gap-2 w-100">
+                            <button class="btn btn-sm btn-primary w-100" id="btn-sync-agora" style="display: none;">
+                                <i class="fa-solid fa-rotate me-1"></i> Backup agora
+                            </button>
+                        </div>
+                        <div id="backup-progress-container" class="w-100 mt-3" aria-live="polite">
+                            <div class="d-flex justify-content-between align-items-center gap-2 mb-1">
+                                <small id="backup-progress-message" class="text-light text-start">Backup automático agendado a cada 5 minutos.</small>
+                                <small id="backup-progress-percent" class="text-light flex-shrink-0">--</small>
+                            </div>
+                            <div class="progress" style="height: 12px; background: rgba(0,0,0,0.4);">
+                                <div id="backup-progress-bar" class="progress-bar bg-info" role="progressbar" style="width: 0%;" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div>
+                            </div>
+                            <small id="backup-progress-count" class="d-block text-light opacity-75 text-start mt-1">O status é atualizado automaticamente.</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+        <!-- FIM DO DASHBOARD DE ARMAZENAMENTO -->
+
+        <div class="d-flex justify-content-between align-items-center mt-1 mb-3">
+            <h5 class="mb-0">Armazenamentos configurados</h5>
+        </div>
+        <div class="row g-3 mt-1 mb-4" id="storage-providers">
+            <!-- provedores adicionais serão renderizados via JS -->
+        </div>
+
+        <!-- LISTA DE CÂMARAS -->
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h2 class="mb-0">Câmaras Ativas</h2>
+        </div>
+
+        <div class="row" id="lista-cameras">
+            <!-- Câmeras injetadas via JS -->
+        </div>
+    </div> <!-- Fim do Container -->
+    <footer class="container py-3 text-end small text-light opacity-50">{{ developer_signature }}</footer>
+
+    <div class="modal fade" id="modalSettings" tabindex="-1" aria-labelledby="settings-title">
+        <div class="modal-dialog modal-fullscreen">
+            <div class="modal-content settings-modal">
+                <header class="settings-header">
+                    <div class="d-flex align-items-center gap-3">
+                        <div class="settings-action-icon mb-0"><i class="fa-solid fa-sliders"></i></div>
+                        <div>
+                            <h1 class="h5 mb-0" id="settings-title">Configurações</h1>
+                            <small class="text-light opacity-75">Timelapse Manager</small>
+                        </div>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-outline-light" data-bs-dismiss="modal" aria-label="Fechar configurações">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </header>
+                <div class="settings-workspace">
+                    <aside class="settings-sidebar" aria-label="Seções de configuração">
+                        {% if is_admin %}
+                        <button class="settings-nav-button active" type="button" data-settings-view="overview"><i class="fa-solid fa-table-columns"></i><span>Visão geral</span></button>
+                        <button class="settings-nav-button" type="button" data-settings-view="cameras"><i class="fa-solid fa-video"></i><span>Câmeras</span></button>
+                        <button class="settings-nav-button" type="button" data-settings-view="storage"><i class="fa-solid fa-hard-drive"></i><span>Armazenamento e backup</span></button>
+                        <button class="settings-nav-button" type="button" data-settings-view="alerts"><i class="fa-solid fa-bell"></i><span>Alertas</span></button>
+                        <button class="settings-nav-button" type="button" data-settings-view="users"><i class="fa-solid fa-users"></i><span>Usuários</span></button>
+                        <button class="settings-nav-button" type="button" data-settings-view="account"><i class="fa-solid fa-user"></i><span>Minha conta</span></button>
+                        {% else %}
+                        <button class="settings-nav-button active" type="button" data-settings-view="account"><i class="fa-solid fa-user"></i><span>Minha conta</span></button>
+                        {% endif %}
+                        <button class="settings-nav-button" type="button" data-settings-view="preferences"><i class="fa-solid fa-palette"></i><span>Preferências</span></button>
+                    </aside>
+                    <main class="settings-content">
+                        {% if is_admin %}
+                        <section class="settings-view active" data-settings-panel="overview">
+                            <div class="settings-section-heading">
+                                <h2 class="h3">Visão geral</h2>
+                                <p>Atalhos para os recursos principais do sistema.</p>
+                            </div>
+                            <div class="row g-3">
+                                <div class="col-md-6 col-xl-4"><article class="settings-action-card"><div class="settings-action-icon"><i class="fa-solid fa-video"></i></div><h3 class="h6">Câmeras</h3><p class="small text-light opacity-75">Gerencie as câmeras cadastradas.</p><button type="button" class="btn btn-sm btn-outline-light" data-settings-action="camera">Adicionar câmera</button></article></div>
+                                <div class="col-md-6 col-xl-4"><article class="settings-action-card"><div class="settings-action-icon"><i class="fa-solid fa-hard-drive"></i></div><h3 class="h6">Armazenamento e backup</h3><p class="small text-light opacity-75">Configure destinos e sincronização.</p><button type="button" class="btn btn-sm btn-outline-light" data-settings-action="storage">Adicionar armazenamento</button></article></div>
+                                <div class="col-md-6 col-xl-4"><article class="settings-action-card"><div class="settings-action-icon"><i class="fa-solid fa-palette"></i></div><h3 class="h6">Preferências</h3><p class="small text-light opacity-75">Personalize as cores e o fundo.</p><button type="button" class="btn btn-sm btn-outline-light" data-settings-view="preferences">Personalizar painel</button></article></div>
+                            </div>
+                        </section>
+
+                        <section class="settings-view" data-settings-panel="cameras">
+                            <div class="settings-section-heading"><h2 class="h3">Câmeras</h2><p>Cadastro, estado e opções de captura.</p></div>
+                            <div class="settings-action-card d-flex flex-wrap justify-content-between align-items-center gap-3">
+                                <div><h3 class="h6">Unidades de captura</h3><p class="small text-light opacity-75 mb-0">As câmeras atuais permanecem cadastradas.</p></div>
+                                <button class="btn btn-primary" type="button" data-settings-action="camera"><i class="fa-solid fa-plus me-2"></i>Adicionar câmera</button>
+                            </div>
+                            <div id="settings-cameras-list" class="settings-list mt-3" aria-live="polite"></div>
+                        </section>
+
+                        <section class="settings-view" data-settings-panel="storage">
+                            <div class="settings-section-heading"><h2 class="h3">Armazenamento e backup</h2><p>Destinos remotos, quota e estado das cópias.</p></div>
+                            <div class="settings-action-card d-flex flex-wrap justify-content-between align-items-center gap-3">
+                                <div><h3 class="h6">Destinos de backup</h3><p class="small text-light opacity-75 mb-0">Adicione ou edite destinos de armazenamento.</p></div>
+                                <div class="d-flex gap-2"><button class="btn btn-outline-light" type="button" data-settings-action="backup"><i class="fa-solid fa-rotate me-2"></i>Backup agora</button><button class="btn btn-primary" type="button" data-settings-action="storage"><i class="fa-solid fa-plus me-2"></i>Adicionar destino</button></div>
+                            </div>
+                            <div id="settings-storage-list" class="settings-list mt-3" aria-live="polite"></div>
+                        </section>
+
+                        <section class="settings-view" data-settings-panel="alerts">
+                            <div class="settings-section-heading"><h2 class="h3">Alertas por e-mail</h2><p>Configure a entrega SMTP e os eventos que geram notificações.</p></div>
+                            <form id="alert-settings-form" class="settings-action-card">
+                                <div class="form-check form-switch mb-4">
+                                    <input class="form-check-input" type="checkbox" id="alerts-smtp-enabled">
+                                    <label class="form-check-label" for="alerts-smtp-enabled">Ativar envio de e-mails</label>
+                                </div>
+                                <div class="row g-3">
+                                    <div class="col-md-8"><label class="form-label" for="alerts-smtp-host">Servidor SMTP</label><input class="form-control" id="alerts-smtp-host" name="smtp_host" autocomplete="off" placeholder="smtp.exemplo.com" required></div>
+                                    <div class="col-md-4"><label class="form-label" for="alerts-smtp-port">Porta</label><input class="form-control" id="alerts-smtp-port" type="number" min="1" max="65535" value="587" required></div>
+                                    <div class="col-md-6"><label class="form-label" for="alerts-smtp-security">Segurança</label><select class="form-select" id="alerts-smtp-security"><option value="starttls">STARTTLS</option><option value="ssl">SSL/TLS</option><option value="none">Sem criptografia</option></select></div>
+                                    <div class="col-md-6"><label class="form-label" for="alerts-smtp-username">Usuário SMTP</label><input class="form-control" id="alerts-smtp-username" autocomplete="username"></div>
+                                    <div class="col-md-6"><label class="form-label" for="alerts-smtp-password">Senha SMTP</label><input class="form-control" id="alerts-smtp-password" type="password" autocomplete="new-password" placeholder="Deixe em branco para manter a senha atual"></div>
+                                    <div class="col-md-6"><label class="form-label" for="alerts-smtp-sender">Remetente</label><input class="form-control" id="alerts-smtp-sender" type="email" autocomplete="email" placeholder="timelapse@exemplo.com"></div>
+                                    <div class="col-12"><label class="form-label" for="alerts-smtp-recipients">Destinatários</label><input class="form-control" id="alerts-smtp-recipients" placeholder="obra@exemplo.com, suporte@exemplo.com"><small class="form-text">Separe vários endereços por vírgula.</small></div>
+                                    <div class="col-12"><label class="form-label" for="alerts-cooldown">Intervalo mínimo entre alertas iguais (minutos)</label><input class="form-control" id="alerts-cooldown" type="number" min="1" max="1440" value="30" style="max-width:220px"></div>
+                                </div>
+                                <hr class="border-secondary my-4">
+                                <h3 class="h6 mb-3">Eventos monitorados</h3>
+                                <div class="d-grid gap-2">
+                                    <div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="alert-backup-failure"><label class="form-check-label" for="alert-backup-failure">Falha em backup</label></div>
+                                    <div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="alert-camera-failure"><label class="form-check-label" for="alert-camera-failure">Câmera offline ou erro na captura</label></div>
+                                    <div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="alert-disk-warning"><label class="form-check-label" for="alert-disk-warning">Espaço livre abaixo de 20%</label></div>
+                                    <div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="alert-disk-critical"><label class="form-check-label" for="alert-disk-critical">Espaço livre abaixo de 5%</label></div>
+                                </div>
+                                <div class="d-flex flex-wrap align-items-center gap-2 mt-4">
+                                    <button class="btn btn-primary" type="submit"><i class="fa-solid fa-floppy-disk me-2"></i>Salvar SMTP</button>
+                                    <button class="btn btn-outline-light" type="button" id="alerts-test-email"><i class="fa-solid fa-paper-plane me-2"></i>Enviar teste</button>
+                                    <label class="form-check ms-md-auto mb-0"><input class="form-check-input" type="checkbox" id="alerts-clear-password"><span class="form-check-label small">Remover senha salva</span></label>
+                                </div>
+                                <div id="alerts-feedback" class="small mt-3" role="status" aria-live="polite"></div>
+                            </form>
+                        </section>
+                        <section class="settings-view" data-settings-panel="users">
+                            <div class="settings-section-heading"><h2 class="h3">Usuários</h2><p>Contas do sistema e níveis de acesso.</p></div>
+                            <form id="user-create-form" class="settings-action-card mb-3">
+                                <h3 class="h6 mb-3">Criar usuário</h3>
+                                <div class="row g-3">
+                                    <div class="col-md-6"><label class="form-label" for="new-user-name">Usuário</label><input class="form-control" id="new-user-name" minlength="3" maxlength="80" autocomplete="off" required></div>
+                                    <div class="col-md-6"><label class="form-label" for="new-user-email">E-mail de recuperação</label><input class="form-control" id="new-user-email" type="email" autocomplete="email" required></div>
+                                    <div class="col-md-6"><label class="form-label" for="new-user-password">Senha inicial</label><input class="form-control" id="new-user-password" type="password" minlength="12" autocomplete="new-password" required></div>
+                                    <div class="col-md-6"><label class="form-label" for="new-user-role">Perfil</label><select class="form-select" id="new-user-role"><option value="user">Usuário comum · somente leitura</option><option value="admin">Acesso Completo</option></select></div>
+                                </div>
+                                <button class="btn btn-primary mt-3" type="submit"><i class="fa-solid fa-user-plus me-2"></i>Criar conta</button>
+                                <div id="users-feedback" class="small mt-2" role="status" aria-live="polite"></div>
+                            </form>
+                            <div id="settings-users-list" class="settings-list" aria-live="polite"></div>
+                        </section>
+                        {% endif %}
+
+                        <section class="settings-view{% if not is_admin %} active{% endif %}" data-settings-panel="account">
+                            <div class="settings-section-heading"><h2 class="h3">Minha conta</h2><p>Usuário: <strong>{{ username }}</strong> · Perfil: {{ 'Acesso Completo' if is_admin else 'Usuário comum' }}</p></div>
+                            <form id="recovery-email-form" class="settings-action-card mb-3">
+                                <h3 class="h6 mb-3">E-mail de recuperação</h3>
+                                <div class="settings-preference-row"><div><small class="text-light opacity-75">Usado para enviar um link temporário ao recuperar a senha.</small></div><input class="form-control" id="account-recovery-email" type="email" value="{{ recovery_email }}" autocomplete="email" style="max-width:340px"></div>
+                                <button class="btn btn-primary mt-3" type="submit">Salvar e-mail</button>
+                                <div id="account-email-feedback" class="small mt-2" role="status"></div>
+                            </form>
+                            <form id="change-password-form" class="settings-action-card">
+                                <h3 class="h6 mb-3">Alterar senha</h3>
+                                <div class="row g-3">
+                                    <div class="col-12"><label class="form-label" for="current-password">Senha atual</label><input class="form-control" type="password" id="current-password" autocomplete="current-password" required></div>
+                                    <div class="col-md-6"><label class="form-label" for="new-password">Nova senha</label><input class="form-control" type="password" id="new-password" minlength="12" autocomplete="new-password" required></div>
+                                    <div class="col-md-6"><label class="form-label" for="confirm-password">Confirmar nova senha</label><input class="form-control" type="password" id="confirm-password" minlength="12" autocomplete="new-password" required></div>
+                                </div>
+                                <button class="btn btn-primary mt-3" type="submit">Atualizar senha</button>
+                                <div id="change-password-feedback" class="small mt-2" role="status"></div>
+                            </form>
+                        </section>
+
+                        <section class="settings-view" data-settings-panel="preferences">
+                            <div class="settings-section-heading"><h2 class="h3">Preferências</h2><p>Aparência deste navegador.</p></div>
+                            <div class="settings-action-card">
+                                <div class="settings-preference-row"><div><h3 class="h6 mb-1">Cor de destaque</h3><small class="text-light opacity-75">Escolha a cor dos controles e indicadores.</small></div><div class="settings-swatches" role="group" aria-label="Cor de destaque">
+                                    <button class="settings-swatch" type="button" data-accent-choice="cyan" style="background:#22c7d7" aria-label="Ciano" aria-pressed="false"></button>
+                                    <button class="settings-swatch" type="button" data-accent-choice="teal" style="background:#38c99b" aria-label="Verde" aria-pressed="false"></button>
+                                    <button class="settings-swatch" type="button" data-accent-choice="amber" style="background:#f0b44c" aria-label="Âmbar" aria-pressed="false"></button>
+                                    <button class="settings-swatch" type="button" data-accent-choice="coral" style="background:#ef806e" aria-label="Coral" aria-pressed="false"></button>
+                                </div></div>
+                                <div class="settings-preference-row"><div><h3 class="h6 mb-1">Plano de fundo</h3><small class="text-light opacity-75">Escolha um tom ou carregue uma imagem.</small></div><select id="background-choice" class="form-select" style="max-width:240px"><option value="deep-blue">Azul profundo</option><option value="graphite">Grafite</option><option value="forest">Verde escuro</option></select></div>
+                                <div class="settings-preference-row"><div><h3 class="h6 mb-1">Imagem de fundo</h3><small class="text-light opacity-75">A imagem é reduzida e salva apenas neste navegador.</small></div><div class="settings-upload-row"><input class="visually-hidden" type="file" id="background-image-file" accept="image/png,image/jpeg,image/webp"><button type="button" class="btn btn-outline-light" id="choose-background-image"><i class="fa-solid fa-image me-2"></i>Escolher imagem</button><button type="button" class="btn btn-outline-secondary d-none" id="remove-background-image">Remover imagem</button></div></div>
+                                <img class="settings-image-preview d-none" id="background-image-preview" alt="Prévia da imagem de fundo">
+                                <div class="settings-preference-row"><div><h3 class="h6 mb-1">Redefinir aparência</h3><small class="text-light opacity-75">Voltar às cores padrão.</small></div><button type="button" class="btn btn-outline-light" id="reset-preferences">Restaurar padrão</button></div>
+                            </div>
+                        </section>
+                    </main>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAIS (Adicionar, Configs, Gerador, Preview) -->
+    
+    <!-- Modal Adicionar Câmera -->
+    <div class="modal fade" id="modalAdicionarCamera" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Adicionar Nova Câmera (ONVIF)</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="form-descoberta">
+                        <div class="mb-3">
+                            <label class="form-label">Nome de Identificação (Ex: Poste 01)</label>
+                            <input type="text" class="form-control" id="cam-nome" required>
+                        </div>
+                        <div class="row mb-3">
+                            <div class="col-8">
+                                <label class="form-label">Endereço IP</label>
+                                <input type="text" class="form-control" id="cam-ip" placeholder="192.168.1.100" required>
+                            </div>
+                            <div class="col-4">
+                                <label class="form-label">Porta</label>
+                                <input type="number" class="form-control" id="cam-porta" value="80" required>
+                            </div>
+                        </div>
+                        <div class="form-check form-switch mb-3">
+                            <input class="form-check-input" type="checkbox" id="cam-https">
+                            <label class="form-check-label" for="cam-https">Usar conexão segura (HTTPS)</label>
+                        </div>
+                        <div class="row mb-3">
+                            <div class="col-6">
+                                <label class="form-label">Usuário</label>
+                                <input type="text" class="form-control" id="cam-user" required>
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label">Senha</label>
+                                <input type="password" class="form-control" id="cam-pass" required>
+                            </div>
+                        </div>
+
+                        <!-- PASSO 2 -->
+                        <div id="passo-2" class="mt-4 pt-3 border-top" style="display: none;">
+                            <h6 class="text-primary mb-3"><i class="fa-solid fa-list-check me-2"></i>Passo 2: Escolha a Resolução</h6>
+                            <div class="mb-3">
+                                <label class="form-label">Perfil de Vídeo (ONVIF)</label>
+                                <select class="form-select" id="cam-perfil-selecionado"></select>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="button" class="btn btn-success" id="btn-descobrir">Conectar e Descobrir</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Preview de Vídeo -->
+    <div class="modal fade" id="modalPreview" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header bg-dark text-white">
+                    <h5 class="modal-title"><i class="fa-solid fa-video text-danger me-2"></i>Preview Ao Vivo</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body text-center bg-black p-0">
+                    <img id="video-preview" src="" class="img-fluid w-100" style="min-height: 300px; object-fit: contain;">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Configurações -->
+    <div class="modal fade" id="modalConfigs" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="fa-solid fa-gear me-2"></i>Configurações Avançadas</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" id="config-cam-id">
+                    <div class="mb-3">
+                        <label class="form-label">Intervalo entre capturas</label>
+                        <select class="form-select" id="config-intervalo">
+                            <option value="1">A cada 1 minuto</option>
+                            <option value="5">A cada 5 minutos</option>
+                            <option value="10">A cada 10 minutos</option>
+                            <option value="30">A cada 30 minutos</option>
+                            <option value="60">A cada 1 hora</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Qualidade da Captura</label>
+                        <select class="form-select" id="config-qualidade">
+                            <option value="2">Altíssima Qualidade</option>
+                            <option value="5">Alta Qualidade</option>
+                            <option value="10">Média Qualidade</option>
+                            <option value="20">Baixa Qualidade</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Resolução de Vídeo (ONVIF)</label>
+                        <select class="form-select" id="config-resolucao">
+                            <option value="">Carregando resoluções da câmera...</option>
+                        </select>
+                    </div>
+                    <div class="form-check form-switch mb-4">
+                        <input class="form-check-input" type="checkbox" id="config-ativa">
+                        <label class="form-check-label" for="config-ativa">Câmera Ativa</label>
+                    </div>
+                    <hr>
+                    <button type="button" class="btn btn-outline-danger w-100" id="btn-deletar-cam">
+                        <i class="fa-solid fa-trash me-2"></i>Excluir Câmera do Sistema
+                    </button>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="button" class="btn btn-primary" id="btn-salvar-configs">Salvar Alterações</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Gerador Timelapse -->
+    <div class="modal fade" id="modalGeradorVideo" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header bg-success text-white">
+                    <h5 class="modal-title"><i class="fa-solid fa-film me-2"></i>Gerador de Timelapse</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" id="gerador-cam-id">
+                    
+                    <div class="mb-3">
+                        <label class="form-label" for="gerador-origem">Origem dos frames</label>
+                        <select class="form-select" id="gerador-origem">
+                            <option value="local">Capturas locais</option>
+                            <option value="backup">Backup</option>
+                        </select>
+                    </div>
+                    <div class="mb-3" id="gerador-backup-storage-wrap" style="display: none;">
+                        <label class="form-label" for="gerador-backup-storage">Armazenamento de origem</label>
+                        <select class="form-select" id="gerador-backup-storage"></select>
+                    </div>
+                    <div class="alert alert-info py-2">
+                        <i class="fa-solid fa-camera me-2"></i><strong>Frames disponíveis:</strong> <span id="info-total-frames">...</span><br>
+                        <small id="info-datas-frames"></small>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-6">
+                            <label class="form-label">Início</label>
+                            <input type="datetime-local" class="form-control" id="gerador-inicio" required>
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label">Fim</label>
+                            <input type="datetime-local" class="form-control" id="gerador-fim" required>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Velocidade (FPS)</label>
+                        <select class="form-select" id="gerador-fps">
+                            <option value="15">15 FPS (Mais lento)</option>
+                            <option value="30" selected>30 FPS (Padrão, fluido)</option>
+                            <option value="60">60 FPS (Muito rápido)</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Resolução de Saída</label>
+                        <select class="form-select" id="gerador-resolucao">
+                            <option value="original" selected>Original da Câmara</option>
+                            <option value="1080p">Forçar 1080p</option>
+                            <option value="720p">Forçar 720p</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Compressão de Vídeo (CRF)</label>
+                        <select class="form-select" id="gerador-crf">
+                            <option value="18">Alta Qualidade</option>
+                            <option value="23" selected>Qualidade Média</option>
+                            <option value="28">Baixa Qualidade</option>
+                        </select>
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col-6">
+                            <label class="form-label">Formato do Contentor</label>
+                            <select class="form-select" id="gerador-formato">
+                                <option value="mp4" selected>MP4</option>
+                                <option value="mkv">MKV</option>
+                                <option value="avi">AVI</option>
+                            </select>
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label">Codec de Vídeo</label>
+                            <select class="form-select" id="gerador-codec">
+                                <option value="libx264" selected>H.264</option>
+                                <option value="libx265">H.265 / HEVC</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-text">O vídeo será salvo em <code>/var/temp/Videos</code> e incluído no próximo backup automático.</div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="button" class="btn btn-success" id="btn-iniciar-render"><i class="fa-solid fa-play me-2"></i>Iniciar Renderização</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Modal Configuração de Nuvem -->
+    <div class="modal fade" id="modalConfigNuvem" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header bg-dark text-white">
+                    <h5 class="modal-title"><i class="fa-solid fa-cloud-arrow-up me-2"></i>Conexão Remota</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" id="nuvem-config-id">
+                    <input type="hidden" id="nuvem-config-novo" value="0">
+                    <div class="mb-3">
+                        <label class="form-label" for="nuvem-nome">Nome deste armazenamento</label>
+                        <input type="text" class="form-control" id="nuvem-nome" placeholder="Ex.: Armazenamento SMB Obra 1" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Tipo de Servidor</label>
+                        <select class="form-select" id="nuvem-tipo">
+                            <option value="smb" selected>SMB / Partilha Windows (Recomendado)</option>
+                            <option value="ftp">FTP / Servidor Local</option>
+                            <option value="webdav">WebDAV / Nextcloud Remoto</option>
+                            <option value="google_drive">Google Drive</option>
+                            <option value="onedrive">OneDrive</option>
+                        </select>
+                    </div>
+                    <div class="mb-3" id="nuvem-campos-legados">
+                        <label class="form-label">Host / IP</label>
+                        <input type="text" class="form-control" id="nuvem-host" placeholder="Ex: 192.168.0.6">
+                    </div>
+                    <div class="row mb-3" id="nuvem-credenciais-legadas">
+                        <div class="col-6">
+                            <label class="form-label">Utilizador</label>
+                            <input type="text" class="form-control" id="nuvem-user">
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label">Senha</label>
+                            <input type="password" class="form-control" id="nuvem-pass">
+                        </div>
+                    </div>
+                    <div id="nuvem-campos-oauth" style="display: none;">
+                        <div class="mb-3">
+                            <label class="form-label">OAuth Client ID</label>
+                            <input type="text" class="form-control" id="nuvem-client-id" autocomplete="off">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">OAuth Client Secret</label>
+                            <input type="password" class="form-control" id="nuvem-client-secret" autocomplete="new-password">
+                        </div>
+                        <p class="form-text">Cadastre exatamente este URI como Redirect URI no Google Cloud ou Microsoft Entra:</p>
+                        <code id="nuvem-oauth-callback" class="small text-break"></code>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" id="nuvem-caminho-label">Caminho Remoto (Pasta destino)</label>
+                        <input type="text" class="form-control" id="nuvem-caminho" value="/">
+                        <div class="form-text" id="nuvem-caminho-ajuda"></div>
+                    </div>
+                    <div class="form-check form-switch mb-2">
+                        <input class="form-check-input" type="checkbox" id="nuvem-ativa">
+                        <label class="form-check-label" for="nuvem-ativa">Ativar Sincronização Automática</label>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-danger me-auto" id="btn-excluir-storage" style="display: none;">
+                        <i class="fa-solid fa-trash me-1"></i> Excluir
+                    </button>
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="button" class="btn btn-primary" id="btn-salvar-nuvem">Guardar Configurações</button>
+                    <button type="button" class="btn btn-success" id="btn-conectar-nuvem" style="display: none;"><i class="fa-solid fa-link me-1"></i>Conectar conta</button>
+                </div>
+            </div>
+        </div>
+    </div>
+   <!-- Modal Reinício de Sistema (NOVO) -->
+    <div class="modal fade" id="modalReiniciar" tabindex="-1" data-bs-backdrop="static">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header bg-warning text-dark">
+                    <h5 class="modal-title"><i class="fa-solid fa-triangle-exclamation me-2"></i>Reinício Necessário</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body text-center p-4">
+                    <h5 class="mb-3">Alteração realizada com sucesso!</h5>
+                    <p class="text-muted mb-4">Para aplicar o novo intervalo de capturas, o motor do sistema deve ser reiniciado.</p>
+                    
+                    <div class="d-grid gap-3">
+                        <button class="btn btn-primary shadow-sm" onclick="pedirReinicio('agora')">
+                            <i class="fa-solid fa-power-off me-2"></i>Reiniciar Agora
+                        </button>
+                        <button class="btn btn-outline-secondary" onclick="pedirReinicio('agendar')">
+                            <i class="fa-solid fa-clock me-2"></i>Agendar para as 00:00 (Madrugada)
+                        </button>
+                        <button class="btn btn-light text-muted border" data-bs-dismiss="modal">
+                            Reiniciar Manualmente Mais Tarde
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- SCRIPTS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/static/js/main.js"></script>
+</body>
+</html>
