@@ -386,7 +386,7 @@ class StorageProviderSummaryTests(unittest.TestCase):
                 for storage in storages:
                     db.add(StorageBackupFile(
                         storage_config_id=storage.id,
-                        local_path=os.path.relpath(path, root),
+                        local_path=os.path.relpath(path, root).replace(os.sep, '/'),
                         remote_path=f'backup/{os.path.basename(path)}',
                         remote_id=f'{storage.id}-{os.path.basename(path)}',
                         file_size=stat.st_size,
@@ -467,9 +467,11 @@ class StorageProviderSummaryTests(unittest.TestCase):
         self.assertNotIn('upload_id', message)
 
     def test_google_drive_update_does_not_send_read_only_parents(self):
-        with tempfile.NamedTemporaryFile() as source:
+        with tempfile.NamedTemporaryFile(delete=False) as source:
             source.write(b'frame')
-            source.flush()
+            source_path = source.name
+
+        try:
             file_list = Mock(ok=True)
             file_list.json.return_value = {'files': [{'id': 'existing-id'}]}
             upload_session = Mock(ok=True)
@@ -484,11 +486,13 @@ class StorageProviderSummaryTests(unittest.TestCase):
                 patch('app.services.cloud_storage.requests.put', return_value=uploaded),
             ):
                 _upload_google_drive(
-                    source.name,
+                    source_path,
                     SimpleNamespace(caminho_remoto='/TimeLapse'),
                     'token',
                     'TimeLapseBackup/Capturas/camera_1/frame.jpg',
                 )
+        finally:
+            os.unlink(source_path)
 
         self.assertNotIn('parents', patch_request.call_args.kwargs['json'])
 
