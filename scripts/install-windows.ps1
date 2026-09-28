@@ -1,5 +1,14 @@
 #Requires -RunAsAdministrator
 $ErrorActionPreference = 'Stop'
+$InstallLogRoot = Join-Path $env:ProgramData 'TimelapseManager\logs'
+New-Item -ItemType Directory -Force -Path $InstallLogRoot | Out-Null
+$InstallLogPath = Join-Path $InstallLogRoot 'install.log'
+Start-Transcript -LiteralPath $InstallLogPath -Append | Out-Null
+trap {
+    Write-Host "Falha na instalação: $($_.Exception.Message)" -ForegroundColor Red
+    Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
+    exit 1
+}
 
 $SourceRoot = Split-Path $PSScriptRoot -Parent
 $InstallRoot = Join-Path $env:ProgramFiles 'TimelapseManager'
@@ -7,6 +16,7 @@ $DataRoot = Join-Path $env:ProgramData 'TimelapseManager'
 $TempRoot = Join-Path $DataRoot 'temp'
 $CredentialRoot = Join-Path $DataRoot 'credentials'
 $CertificateRoot = Join-Path $DataRoot 'tls'
+$ServiceSid = '*S-1-5-19'
 $SourceBundleApp = Join-Path $SourceRoot 'TimelapseManager.exe'
 $InstallBundleApp = Join-Path $InstallRoot 'TimelapseManager.exe'
 $BundledRuntime = (Test-Path -LiteralPath $SourceBundleApp) -or (Test-Path -LiteralPath $InstallBundleApp)
@@ -27,6 +37,10 @@ if (-not $BundledRuntime) {
 }
 
 New-Item -ItemType Directory -Force -Path $InstallRoot, $DataRoot, $TempRoot, $CredentialRoot, $CertificateRoot | Out-Null
+& icacls.exe $CredentialRoot /inheritance:r /grant "${ServiceSid}:(OI)(CI)R" '*S-1-5-32-544:(OI)(CI)F' /T | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw 'Não foi possível proteger a pasta de credenciais.'
+}
 if ([IO.Path]::GetFullPath($SourceRoot).TrimEnd('\') -ne [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')) {
     & robocopy.exe $SourceRoot $InstallRoot /E /XD venv .venv __pycache__ tests dist build /XF '*.db' '*.pyc' '*.key' '*.crt'
     if ($LASTEXITCODE -gt 7) {
@@ -63,9 +77,17 @@ if (-not (Test-Path -LiteralPath $PasswordPath)) {
 }
 $SessionSecretPath = Join-Path $CredentialRoot 'TIMELAPSE_SESSION_SECRET'
 if (-not (Test-Path -LiteralPath $SessionSecretPath)) {
-    $SessionSecret = & $VenvPython -c 'import secrets; print(secrets.token_urlsafe(48), end="")'
-    [IO.File]::WriteAllText($SessionSecretPath, $SessionSecret, [Text.UTF8Encoding]::new($false))
-    Remove-Variable SessionSecret
+    $RandomBytes = New-Object byte[] 48
+    $RandomGenerator = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $RandomGenerator.GetBytes($RandomBytes)
+        $SessionSecret = [Convert]::ToBase64String($RandomBytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+        [IO.File]::WriteAllText($SessionSecretPath, $SessionSecret, [Text.UTF8Encoding]::new($false))
+    } finally {
+        $RandomGenerator.Dispose()
+        [Array]::Clear($RandomBytes, 0, $RandomBytes.Length)
+        Remove-Variable SessionSecret -ErrorAction SilentlyContinue
+    }
 }
 
 $DefaultHost = $env:COMPUTERNAME
@@ -105,10 +127,8 @@ $Config = @{
 } | ConvertTo-Json -Compress
 [IO.File]::WriteAllText((Join-Path $InstallRoot 'windows-config.json'), $Config, [Text.UTF8Encoding]::new($false))
 
-$ServiceSid = '*S-1-5-19'
 & icacls.exe $InstallRoot /grant "${ServiceSid}:(OI)(CI)RX" /T | Out-Null
 & icacls.exe $DataRoot /grant "${ServiceSid}:(OI)(CI)M" /T | Out-Null
-& icacls.exe $CredentialRoot /inheritance:r /grant "${ServiceSid}:(OI)(CI)R" '*S-1-5-32-544:(OI)(CI)F' /T | Out-Null
 & icacls.exe $CertificateRoot /inheritance:r /grant "${ServiceSid}:(OI)(CI)R" '*S-1-5-32-544:(OI)(CI)F' /T | Out-Null
 
 $TaskName = 'Timelapse Manager'
@@ -123,3 +143,4 @@ if (-not (Get-NetFirewallRule -DisplayName 'Timelapse Manager HTTPS' -ErrorActio
 Start-ScheduledTask -TaskName $TaskName
 Write-Host "Instalado. Abra https://$ServerHost`:8000 e confie no certificado local."
 Write-Host "Logs: $(Join-Path $DataRoot 'logs\timelapse-manager.log')"
+Stop-Transcript | Out-Null
