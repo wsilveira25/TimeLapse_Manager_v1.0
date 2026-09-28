@@ -190,6 +190,8 @@ $TempRoot = Join-Path $DataRoot 'temp'
 $CredentialRoot = Join-Path $DataRoot 'credentials'
 $CertificateRoot = Join-Path $DataRoot 'tls'
 $ServiceSid = '*S-1-5-19'
+$InstallerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$TaskServiceSid = 'S-1-5-19'
 $SourceBundleApp = Join-Path $SourceRoot 'TimelapseManager.exe'
 $InstallBundleApp = Join-Path $InstallRoot 'TimelapseManager.exe'
 $BundledRuntime = (Test-Path -LiteralPath $SourceBundleApp) -or (Test-Path -LiteralPath $InstallBundleApp)
@@ -210,7 +212,7 @@ if (-not $BundledRuntime) {
 }
 
 New-Item -ItemType Directory -Force -Path $InstallRoot, $DataRoot, $TempRoot, $CredentialRoot, $CertificateRoot | Out-Null
-& icacls.exe $CredentialRoot /inheritance:r /grant "${ServiceSid}:(OI)(CI)R" '*S-1-5-32-544:(OI)(CI)F' /T | Out-Null
+& icacls.exe $CredentialRoot /inheritance:r /grant:r "${ServiceSid}:(OI)(CI)R" '*S-1-5-32-544:(OI)(CI)F' "*${InstallerSid}:(OI)(CI)F" /T | Out-Null
 if ($LASTEXITCODE -ne 0) {
     throw 'Não foi possível proteger a pasta de credenciais.'
 }
@@ -306,7 +308,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Não foi possível proteger o certificado HTTP
 $TaskName = 'Timelapse Manager'
 $Action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$(Join-Path $InstallRoot 'scripts\start-windows.ps1')`"" -WorkingDirectory $InstallRoot
 $Trigger = New-ScheduledTaskTrigger -AtStartup
-$Principal = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\LOCAL SERVICE' -LogonType ServiceAccount -RunLevel Limited
+$Principal = New-ScheduledTaskPrincipal -UserId $TaskServiceSid -LogonType ServiceAccount -RunLevel Limited
 $Settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
 Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings -Force | Out-Null
 if (-not (Get-NetFirewallRule -DisplayName 'Timelapse Manager HTTPS' -ErrorAction SilentlyContinue)) {
