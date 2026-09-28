@@ -37,7 +37,7 @@ Get-Content "$env:ProgramData\TimelapseManager\logs\timelapse-manager.log" -Tail
 Run this from a systemd-based distribution such as Ubuntu or Debian. The one-line command clones the private repository and runs the installer, which downloads and checksum-verifies the source archive first:
 
 ```sh
-gh repo clone <OWNER>/TimeLapse_Manager_v1.0 /tmp/timelapse-bootstrap && sudo /tmp/timelapse-bootstrap/scripts/install-from-github.sh <OWNER>/TimeLapse_Manager_v1.0
+gh repo clone <OWNER>/TimeLapse_Manager_v1.0 /tmp/timelapse-bootstrap && bash /tmp/timelapse-bootstrap/scripts/install-from-github.sh <OWNER>/TimeLapse_Manager_v1.0
 ```
 
 The installer requires Python 3.11+, FFmpeg, `systemd-creds`, and `unzip`. It prompts for the admin password and host name/IP, creates a local TLS certificate if needed, and enables `timelapse-manager.service`. Credentials are encrypted by systemd. Existing credentials and the database are preserved on reinstall.
