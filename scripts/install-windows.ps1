@@ -81,7 +81,7 @@ function Show-InitialConfiguration {
     & $addHelp 135 'Use o nome deste computador ou um endereço IPv4 fixo. Os outros dispositivos usarão esse endereço para abrir o sistema na rede.'
 
     $passwordLabel = New-Object Windows.Forms.Label
-    $passwordLabel.Text = if ($PasswordAlreadyConfigured) { 'Nova senha do administrador (opcional)' } else { 'Senha inicial do administrador' }
+    $passwordLabel.Text = if ($PasswordAlreadyConfigured) { 'Senha existente do administrador' } else { 'Senha inicial do administrador' }
     $passwordLabel.Location = New-Object Drawing.Point(28, 179)
     $passwordLabel.Size = New-Object Drawing.Size(440, 22)
     $form.Controls.Add($passwordLabel)
@@ -89,9 +89,10 @@ function Show-InitialConfiguration {
     $passwordBox.Location = New-Object Drawing.Point(30, 204)
     $passwordBox.Size = New-Object Drawing.Size(550, 26)
     $passwordBox.UseSystemPasswordChar = $true
+    $passwordBox.Enabled = -not $PasswordAlreadyConfigured
     $form.Controls.Add($passwordBox)
     $passwordConfirmLabel = New-Object Windows.Forms.Label
-    $passwordConfirmLabel.Text = 'Confirme a senha'
+    $passwordConfirmLabel.Text = if ($PasswordAlreadyConfigured) { 'Senha já protegida; será mantida' } else { 'Confirme a senha' }
     $passwordConfirmLabel.Location = New-Object Drawing.Point(28, 246)
     $passwordConfirmLabel.Size = New-Object Drawing.Size(260, 22)
     $form.Controls.Add($passwordConfirmLabel)
@@ -99,9 +100,10 @@ function Show-InitialConfiguration {
     $passwordConfirmBox.Location = New-Object Drawing.Point(30, 271)
     $passwordConfirmBox.Size = New-Object Drawing.Size(550, 26)
     $passwordConfirmBox.UseSystemPasswordChar = $true
+    $passwordConfirmBox.Enabled = -not $PasswordAlreadyConfigured
     $form.Controls.Add($passwordConfirmBox)
     $passwordHelp = if ($PasswordAlreadyConfigured) {
-        'A senha existente será mantida se os dois campos ficarem vazios. Para trocá-la, informe e confirme uma nova senha com pelo menos 12 caracteres.'
+        'Uma senha já existe nesta instalação e será preservada sem ser lida ou sobrescrita. Depois de entrar no sistema, use a área de usuários para alterá-la.'
     } else {
         'Crie a senha da conta admin. Ela deve ter pelo menos 12 caracteres; digite a mesma senha nos dois campos.'
     }
@@ -192,6 +194,8 @@ $CertificateRoot = Join-Path $DataRoot 'tls'
 $ServiceSid = '*S-1-5-19'
 $InstallerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $TaskServiceSid = 'S-1-5-19'
+$PasswordPath = Join-Path $CredentialRoot 'TIMELAPSE_PASSWORD'
+$PasswordAlreadyConfigured = Test-Path -LiteralPath $PasswordPath
 $SourceBundleApp = Join-Path $SourceRoot 'TimelapseManager.exe'
 $InstallBundleApp = Join-Path $InstallRoot 'TimelapseManager.exe'
 $BundledRuntime = (Test-Path -LiteralPath $SourceBundleApp) -or (Test-Path -LiteralPath $InstallBundleApp)
@@ -212,13 +216,13 @@ if (-not $BundledRuntime) {
 }
 
 New-Item -ItemType Directory -Force -Path $InstallRoot, $DataRoot, $TempRoot, $CredentialRoot, $CertificateRoot | Out-Null
-& takeown.exe /F $CredentialRoot /R /D Y | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    throw 'O Windows não permitiu recuperar a propriedade da pasta de credenciais. Execute o instalador com Executar como administrador.'
-}
-& icacls.exe $CredentialRoot /inheritance:r /grant:r "${ServiceSid}:(OI)(CI)R" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "*${InstallerSid}:(OI)(CI)F" /T /C | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    throw 'Não foi possível proteger a pasta de credenciais.'
+if ($PasswordAlreadyConfigured) {
+    Write-Host 'Credencial existente detectada: ela será preservada sem alterar proprietário ou permissões.'
+} else {
+    & icacls.exe $CredentialRoot /inheritance:r /grant:r "${ServiceSid}:(OI)(CI)R" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "*${InstallerSid}:(OI)(CI)F" | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Não foi possível configurar as permissões da nova pasta de credenciais.'
+    }
 }
 if ([IO.Path]::GetFullPath($SourceRoot).TrimEnd('\') -ne [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')) {
     & robocopy.exe $SourceRoot $InstallRoot /E /XD venv .venv __pycache__ tests dist build /XF '*.db' '*.pyc' '*.key' '*.crt'
@@ -239,14 +243,6 @@ if ($BundledRuntime) {
     $FfmpegPath = $FfmpegCommand.Source
 }
 
-$PasswordPath = Join-Path $CredentialRoot 'TIMELAPSE_PASSWORD'
-if (Test-Path -LiteralPath $PasswordPath) {
-    & attrib.exe -R $PasswordPath
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Não foi possível ajustar o atributo da credencial existente. Verifique as permissões da pasta de credenciais.'
-    }
-}
-$PasswordAlreadyConfigured = Test-Path -LiteralPath $PasswordPath
 $DefaultHost = $env:COMPUTERNAME
 $DefaultSignature = 'Desenvolvido com Timelapse Manager'
 $SignaturePath = Join-Path $DataRoot 'developer_signature.txt'
