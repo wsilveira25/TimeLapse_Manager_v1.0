@@ -212,7 +212,11 @@ if (-not $BundledRuntime) {
 }
 
 New-Item -ItemType Directory -Force -Path $InstallRoot, $DataRoot, $TempRoot, $CredentialRoot, $CertificateRoot | Out-Null
-& icacls.exe $CredentialRoot /inheritance:r /grant:r "${ServiceSid}:(OI)(CI)R" '*S-1-5-32-544:(OI)(CI)F' "*${InstallerSid}:(OI)(CI)F" /T | Out-Null
+& takeown.exe /F $CredentialRoot /R /D Y | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw 'O Windows não permitiu recuperar a propriedade da pasta de credenciais. Execute o instalador com Executar como administrador.'
+}
+& icacls.exe $CredentialRoot /inheritance:r /grant:r "${ServiceSid}:(OI)(CI)R" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "*${InstallerSid}:(OI)(CI)F" /T /C | Out-Null
 if ($LASTEXITCODE -ne 0) {
     throw 'Não foi possível proteger a pasta de credenciais.'
 }
@@ -236,6 +240,12 @@ if ($BundledRuntime) {
 }
 
 $PasswordPath = Join-Path $CredentialRoot 'TIMELAPSE_PASSWORD'
+if (Test-Path -LiteralPath $PasswordPath) {
+    & attrib.exe -R $PasswordPath
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Não foi possível ajustar o atributo da credencial existente. Verifique as permissões da pasta de credenciais.'
+    }
+}
 $PasswordAlreadyConfigured = Test-Path -LiteralPath $PasswordPath
 $DefaultHost = $env:COMPUTERNAME
 $DefaultSignature = 'Desenvolvido com Timelapse Manager'
