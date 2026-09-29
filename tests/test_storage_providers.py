@@ -300,6 +300,23 @@ class StorageProviderSummaryTests(unittest.TestCase):
         self.assertIn('total_bytes', item)
         self.assertIn('livre_bytes', item)
 
+    def test_storage_status_returns_before_background_metrics_scan(self):
+        with (
+            patch.object(system_router, '_STORAGE_STATUS_CACHE', None),
+            patch.object(system_router, '_STORAGE_STATUS_UPDATED_AT', 0.0),
+            patch.object(system_router, '_STORAGE_STATUS_REFRESHING', False),
+            patch('app.routers.system.shutil.disk_usage', return_value=(1000, 400, 600)),
+            patch('app.routers.system._calcular_status_armazenamento') as calculate,
+            patch('app.routers.system.threading.Thread') as thread,
+        ):
+            response = system_router.obter_status_armazenamento()
+
+        calculate.assert_not_called()
+        thread.assert_called_once()
+        thread.return_value.start.assert_called_once()
+        self.assertEqual(response['metricas_status'], 'atualizando')
+        self.assertIsNone(response['calculo_previo']['capturas_realizadas'])
+
     def test_backup_error_summary_does_not_expose_technical_details(self):
         message = resumir_erro_backup(
             '403 Client Error: Forbidden for url: https://drive.example/upload?token=secret'

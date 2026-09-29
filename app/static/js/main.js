@@ -300,11 +300,15 @@ async function carregarStatusDisco() {
         const dados = await res.json();
         const disco = dados.disco || {};
         const prev = dados.calculo_previo || {};
+        const metricasCalculando = dados.metricas_status === 'atualizando';
         const provedores = Array.isArray(dados.provedores) ? dados.provedores : [];
 
         const resumo = document.getElementById('disco-resumo');
         if (resumo) {
-            resumo.innerText = `Total: ${formatarBytes(disco.total_bytes || 0)} / Livre: ${formatarBytes(disco.livre_bytes || 0)}`;
+            const snapshotTime = dados.metricas_atualizadas_em
+                ? ` · Atualizado às ${new Date(dados.metricas_atualizadas_em * 1000).toLocaleTimeString('pt-BR')}`
+                : metricasCalculando ? ' · Atualizando métricas...' : '';
+            resumo.innerText = `Total: ${formatarBytes(disco.total_bytes || 0)} / Livre: ${formatarBytes(disco.livre_bytes || 0)}${snapshotTime}`;
         }
         const alertaDisco = document.getElementById('disco-alerta');
         if (alertaDisco) {
@@ -331,17 +335,19 @@ async function carregarStatusDisco() {
 
         const textoMedia = document.getElementById('texto-media-kb');
         if (textoMedia) {
-            textoMedia.innerText = `CÁLCULO PRÉVIO (MÉDIA: ${prev.tamanho_medio_kb ?? 0} KB)`;
+            textoMedia.innerText = metricasCalculando && prev.tamanho_medio_kb == null
+                ? 'CÁLCULO PRÉVIO (CALCULANDO...)'
+                : `CÁLCULO PRÉVIO (MÉDIA: ${prev.tamanho_medio_kb ?? 0} KB)`;
         }
 
         const prevTotal = document.getElementById('prev-total');
-        if (prevTotal) prevTotal.innerText = Number(prev.capturas_totais || 0).toLocaleString('pt-BR');
+        if (prevTotal) prevTotal.innerText = metricasCalculando && prev.capturas_totais == null ? 'Calculando...' : Number(prev.capturas_totais || 0).toLocaleString('pt-BR');
 
         const prevRealizadas = document.getElementById('prev-realizadas');
-        if (prevRealizadas) prevRealizadas.innerText = Number(prev.capturas_realizadas || 0).toLocaleString('pt-BR');
+        if (prevRealizadas) prevRealizadas.innerText = metricasCalculando && prev.capturas_realizadas == null ? 'Calculando...' : Number(prev.capturas_realizadas || 0).toLocaleString('pt-BR');
 
         const prevRestantes = document.getElementById('prev-restantes');
-        if (prevRestantes) prevRestantes.innerText = Number(prev.capturas_restantes || 0).toLocaleString('pt-BR');
+        if (prevRestantes) prevRestantes.innerText = metricasCalculando && prev.capturas_restantes == null ? 'Calculando...' : Number(prev.capturas_restantes || 0).toLocaleString('pt-BR');
 
         atualizarProgressoBackup(dados.backup_progresso || null);
         renderProvedoresStorage(provedores);
@@ -1086,9 +1092,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const isAdmin = document.body.dataset.admin === 'true';
     if (isAdmin) {
+        carregarStatusDisco();
         await Promise.all([
             carregarCameras(),
-            carregarStatusDisco(),
             carregarConfigNuvem(),
         ]);
     }
@@ -1105,7 +1111,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         bootstrap.Modal.getOrCreateInstance(document.getElementById('modalSettings')).show();
     }
 
-    if (isAdmin) setInterval(carregarStatusDisco, 5000);
+    if (isAdmin) setInterval(carregarStatusDisco, 30000);
 
     const tipoNuvem = document.getElementById('nuvem-tipo');
     if (tipoNuvem) {

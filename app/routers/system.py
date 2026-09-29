@@ -1,3 +1,5 @@
+import copy
+import logging
 import os
 import secrets
 import sys
@@ -12,7 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from fastapi.responses import RedirectResponse
 from app.core.auth import require_admin
-from app.core.database import get_db
+from app.core.database import SessionLocal, get_db
 from app.core.paths import TEMP_DIR
 from app.models.storage import StorageBackupFile, StorageConfig, SystemSettings
 from app.services.cloud_storage import (
@@ -32,6 +34,7 @@ from app.services.alert_service import (
 from app.tasks.scheduler import scheduler as app_scheduler, executar_reinicio_processo
 
 router = APIRouter(prefix="/api/system", tags=["Sistema"])
+logger = logging.getLogger(__name__)
 
 #PASTA_POOL_BASE = "/var/temp/Capturas"
 PASTA_CAPTURAS = str(TEMP_DIR / "Capturas")
@@ -88,8 +91,7 @@ def contar_frames_no_backup(db: Session, storage_config_id: int) -> int:
     ).scalar() or 0
 
 
-@router.get("/storage", dependencies=[Depends(require_admin)])
-def obter_status_armazenamento(db: Session = Depends(get_db)):
+def _calcular_status_armazenamento(db: Session):
     os.makedirs(PASTA_CAPTURAS, exist_ok=True)
     total, used, free = shutil.disk_usage(TEMP_DIR)
 
@@ -190,6 +192,73 @@ def obter_status_armazenamento(db: Session = Depends(get_db)):
         },
         "backup_progresso": obter_status_backup(),
         "provedores": provedores,
+    }
+
+
+_STORAGE_STATUS_CACHE: dict | None = None
+_STORAGE_STATUS_UPDATED_AT = 0.0
+_STORAGE_STATUS_REFRESHING = False
+_STORAGE_STATUS_LOCK = threading.Lock()
+_STORAGE_STATUS_TTL_SECONDS = 30
+
+
+def _atualizar_cache_status_armazenamento():
+    global _STORAGE_STATUS_CACHE, _STORAGE_STATUS_UPDATED_AT, _STORAGE_STATUS_REFRESHING
+    try:
+        with SessionLocal() as db:
+            snapshot = _calcular_status_armazenamento(db)
+        with _STORAGE_STATUS_LOCK:
+            _STORAGE_STATUS_CACHE = snapshot
+            _STORAGE_STATUS_UPDATED_AT = time.monotonic()
+    except Exception:
+        logger.exception("Falha ao atualizar métricas de armazenamento em segundo plano")
+    finally:
+        with _STORAGE_STATUS_LOCK:
+            _STORAGE_STATUS_REFRESHING = False
+
+
+@router.get("/storage", dependencies=[Depends(require_admin)])
+def obter_status_armazenamento():
+    global _STORAGE_STATUS_REFRESHING
+    now = time.monotonic()
+    with _STORAGE_STATUS_LOCK:
+        cache_is_stale = (
+            _STORAGE_STATUS_CACHE is None
+            or now - _STORAGE_STATUS_UPDATED_AT >= _STORAGE_STATUS_TTL_SECONDS
+        )
+        if cache_is_stale and not _STORAGE_STATUS_REFRESHING:
+            _STORAGE_STATUS_REFRESHING = True
+            threading.Thread(target=_atualizar_cache_status_armazenamento, daemon=True).start()
+
+        snapshot = copy.deepcopy(_STORAGE_STATUS_CACHE)
+        refreshing = _STORAGE_STATUS_REFRESHING
+        updated_at = _STORAGE_STATUS_UPDATED_AT
+
+    if snapshot is not None:
+        snapshot["metricas_status"] = "atualizando" if refreshing else "atualizado"
+        snapshot["metricas_atualizadas_em"] = int(time.time() - (now - updated_at)) if updated_at else None
+        return snapshot
+
+    total, used, free = shutil.disk_usage(TEMP_DIR)
+    local_summary = build_provider_summary(
+        nome="Armazenamento Local",
+        total_bytes=total,
+        usado_bytes=used,
+        ativo=True,
+        tipo="local",
+    )
+    return {
+        "disco": local_summary,
+        "calculo_previo": {
+            "capturas_realizadas": None,
+            "capturas_restantes": None,
+            "capturas_totais": None,
+            "tamanho_medio_kb": None,
+        },
+        "backup_progresso": obter_status_backup(),
+        "provedores": [local_summary],
+        "metricas_status": "atualizando",
+        "metricas_atualizadas_em": None,
     }
 
 
