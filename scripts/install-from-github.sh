@@ -22,9 +22,9 @@ ARCHIVE="$(find "$TEMP_ROOT" -maxdepth 1 -type f -name 'timelapse-manager-*.zip'
 [[ -n "$ARCHIVE" ]] || { printf 'A Release não contém o pacote Linux.\n' >&2; exit 1; }
 SUMS="$TEMP_ROOT/SHA256SUMS.txt"
 [[ -f "$SUMS" ]] || { printf 'A Release não contém SHA256SUMS.txt.\n' >&2; exit 1; }
-EXPECTED_HASH="$(awk -v file="$(basename "$ARCHIVE")" '$2 == file { print $1; exit }' "$SUMS")"
+EXPECTED_HASH="$(awk -v file="$(basename "$ARCHIVE")" '{ sub(/\r$/, "", $2) } $2 == file { print tolower($1); exit }' "$SUMS")"
 [[ -n "$EXPECTED_HASH" ]] || { printf 'O SHA256 do pacote não foi encontrado na Release.\n' >&2; exit 1; }
-ACTUAL_HASH="$(sha256sum "$ARCHIVE" | awk '{print $1}')"
+ACTUAL_HASH="$(sha256sum "$ARCHIVE" | awk '{print tolower($1)}')"
 [[ "$EXPECTED_HASH" == "$ACTUAL_HASH" ]] || { printf 'O SHA256 do pacote não corresponde ao manifesto.\n' >&2; exit 1; }
 
 unzip -q "$ARCHIVE" -d "$TEMP_ROOT"
