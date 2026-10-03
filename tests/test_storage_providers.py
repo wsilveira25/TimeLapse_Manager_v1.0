@@ -16,13 +16,14 @@ from app.models.user import SystemUser
 from app.routers import system as system_router
 from app.routers import users as users_router
 from app.routers.system import build_provider_summary, resumir_erro_backup
-from app.services import alert_service, backup_service, capture_service
+from app.services import alert_service, backup_service, capture_service, cloud_storage
 from app.services.cloud_storage import (
     _google_error_message,
     _google_folder_for_remote_path,
     _upload_google_drive,
 )
 from app.tasks import scheduler as task_scheduler
+from urllib3.util import connection as urllib3_connection
 
 
 class StorageProviderSummaryTests(unittest.TestCase):
@@ -300,22 +301,44 @@ class StorageProviderSummaryTests(unittest.TestCase):
         self.assertIn('total_bytes', item)
         self.assertIn('livre_bytes', item)
 
-    def test_storage_status_returns_before_background_metrics_scan(self):
-        with (
-            patch.object(system_router, '_STORAGE_STATUS_CACHE', None),
-            patch.object(system_router, '_STORAGE_STATUS_UPDATED_AT', 0.0),
-            patch.object(system_router, '_STORAGE_STATUS_REFRESHING', False),
-            patch('app.routers.system.shutil.disk_usage', return_value=(1000, 400, 600)),
-            patch('app.routers.system._calcular_status_armazenamento') as calculate,
-            patch('app.routers.system.threading.Thread') as thread,
-        ):
-            response = system_router.obter_status_armazenamento()
+    def test_cloud_http_prefers_ipv4_when_configured(self):
+        original_has_ipv6 = urllib3_connection.HAS_IPV6
+        try:
+            with patch.dict(os.environ, {'TIMELAPSE_HTTP_IPV4_ONLY': 'true'}):
+                cloud_storage._configure_http_address_family()
+                self.assertFalse(urllib3_connection.HAS_IPV6)
 
+            with patch.dict(os.environ, {'TIMELAPSE_HTTP_IPV4_ONLY': 'false'}):
+                cloud_storage._configure_http_address_family()
+                self.assertTrue(urllib3_connection.HAS_IPV6)
+        finally:
+            urllib3_connection.HAS_IPV6 = original_has_ipv6
+
+    def test_storage_status_returns_before_background_metrics_scan(self):
+        engine = create_engine('sqlite:///:memory:')
+        Base.metadata.create_all(engine)
+        TestSession = sessionmaker(bind=engine)
+        with TestSession() as db:
+            db.add(StorageConfig(tipo='smb', nome='SMB da obra', ativo=True, host='192.168.0.6', caminho_remoto='capturas'))
+            db.commit()
+            with (
+                patch.object(system_router, '_STORAGE_STATUS_CACHE', None),
+                patch.object(system_router, '_STORAGE_STATUS_UPDATED_AT', 0.0),
+                patch.object(system_router, '_STORAGE_STATUS_REFRESHING', False),
+                patch('app.routers.system.shutil.disk_usage', return_value=(1000, 400, 600)),
+                patch('app.routers.system._calcular_status_armazenamento') as calculate,
+                patch('app.routers.system.threading.Thread') as thread,
+            ):
+                response = system_router.obter_status_armazenamento(db)
+
+        engine.dispose()
         calculate.assert_not_called()
         thread.assert_called_once()
         thread.return_value.start.assert_called_once()
         self.assertEqual(response['metricas_status'], 'atualizando')
         self.assertIsNone(response['calculo_previo']['capturas_realizadas'])
+        self.assertEqual([item['tipo'] for item in response['provedores']], ['local', 'smb'])
+        self.assertEqual(response['provedores'][1]['destino'], r'\\192.168.0.6\capturas')
 
     def test_backup_error_summary_does_not_expose_technical_details(self):
         message = resumir_erro_backup(

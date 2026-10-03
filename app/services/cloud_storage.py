@@ -5,6 +5,15 @@ import mimetypes
 from urllib.parse import quote, urlencode
 
 import requests
+from urllib3.util import connection as urllib3_connection
+
+
+def _configure_http_address_family():
+    prefer_ipv4 = os.getenv("TIMELAPSE_HTTP_IPV4_ONLY", "true").strip().lower()
+    urllib3_connection.HAS_IPV6 = prefer_ipv4 not in {"1", "true", "yes", "on"}
+
+
+_configure_http_address_family()
 
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"

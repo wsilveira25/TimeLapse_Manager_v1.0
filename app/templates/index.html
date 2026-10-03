@@ -6,7 +6,7 @@
     <title>Timelapse Manager</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="/static/css/dashboard.css">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=2">
     <style>
         /* Custom styles for form text */
         .form-text { color:#444a50; } /* Custom color for form text *
@@ -284,6 +284,7 @@
                         <section class="settings-view" data-settings-panel="preferences">
                             <div class="settings-section-heading"><h2 class="h3">Preferências</h2><p>Aparência deste navegador.</p></div>
                             <div class="settings-action-card">
+                                <div class="settings-preference-row"><div><h3 class="h6 mb-1">Tema</h3><small class="text-light opacity-75">Alterne entre a aparência escura e clara.</small></div><select id="theme-choice" class="form-select" style="max-width:240px"><option value="dark">Escuro</option><option value="light">Claro</option></select></div>
                                 <div class="settings-preference-row"><div><h3 class="h6 mb-1">Cor de destaque</h3><small class="text-light opacity-75">Escolha a cor dos controles e indicadores.</small></div><div class="settings-swatches" role="group" aria-label="Cor de destaque">
                                     <button class="settings-swatch" type="button" data-accent-choice="cyan" style="background:#22c7d7" aria-label="Ciano" aria-pressed="false"></button>
                                     <button class="settings-swatch" type="button" data-accent-choice="teal" style="background:#38c99b" aria-label="Verde" aria-pressed="false"></button>
@@ -616,6 +617,6 @@
     </div>
     <!-- SCRIPTS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="/static/js/main.js"></script>
+    <script src="/static/js/main.js?v=2"></script>
 </body>
 </html>

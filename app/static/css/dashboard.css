@@ -51,6 +51,97 @@ body.app-shell[data-background="deep-blue"] {
     --app-page-edge: #20283b;
 }
 
+body.app-shell[data-theme="light"] {
+    color-scheme: light;
+    --app-page: #f3f6f8;
+    --app-page-edge: #e4eaee;
+    --app-panel: #ffffff;
+    --app-panel-raised: #f4f7f9;
+    --app-border: rgba(28, 43, 54, .14);
+    --app-copy: #1c2b36;
+    --app-muted: #526371;
+}
+
+body.app-shell[data-theme="light"][data-accent="cyan"] { --app-accent: #087f8c; --app-accent-rgb: 8, 127, 140; }
+body.app-shell[data-theme="light"][data-accent="teal"] { --app-accent: #18794e; --app-accent-rgb: 24, 121, 78; }
+body.app-shell[data-theme="light"][data-accent="amber"] { --app-accent: #946200; --app-accent-rgb: 148, 98, 0; }
+body.app-shell[data-theme="light"][data-accent="coral"] { --app-accent: #b4453a; --app-accent-rgb: 180, 69, 58; }
+
+body.app-shell[data-theme="light"]::before {
+    background-image: linear-gradient(145deg, var(--app-page), var(--app-page-edge));
+}
+
+body.app-shell[data-theme="light"][data-background-image="custom"]::before {
+    background-image: linear-gradient(135deg, rgba(244, 248, 250, .72), rgba(237, 243, 247, .82)), var(--user-background-image);
+}
+
+body.app-shell[data-theme="light"] .navbar {
+    background: rgba(247, 249, 250, .96) !important;
+    color: var(--app-copy);
+}
+
+body.app-shell[data-theme="light"] .navbar-brand,
+body.app-shell[data-theme="light"] .navbar .btn-outline-light {
+    color: var(--app-copy) !important;
+}
+
+body.app-shell[data-theme="light"] .navbar .btn-outline-light {
+    --bs-btn-border-color: rgba(28, 43, 54, .3);
+    --bs-btn-hover-bg: rgba(28, 43, 54, .08);
+    --bs-btn-hover-color: var(--app-copy);
+}
+
+body.app-shell[data-theme="light"] .text-light,
+body.app-shell[data-theme="light"] .text-white {
+    color: var(--app-copy) !important;
+}
+
+body.app-shell[data-theme="light"] .card {
+    background: rgba(255, 255, 255, .88) !important;
+    box-shadow: 0 10px 26px rgba(28, 43, 54, .09) !important;
+}
+
+body.app-shell[data-theme="light"] .form-control,
+body.app-shell[data-theme="light"] .form-select {
+    color: var(--app-copy);
+    background-color: #fff;
+    border-color: #aab7c1;
+}
+
+body.app-shell[data-theme="light"] .form-control::placeholder { color: #657580; }
+body.app-shell[data-theme="light"] .form-text { color: #526371; }
+
+body.app-shell[data-theme="light"] .settings-modal {
+    background-color: rgba(248, 250, 251, .97);
+    background-image: linear-gradient(145deg, rgba(248, 250, 251, .94), rgba(236, 242, 246, .96));
+}
+
+body.app-shell[data-theme="light"] .settings-header,
+body.app-shell[data-theme="light"] .settings-sidebar,
+body.app-shell[data-theme="light"] .settings-content {
+    background: rgba(255, 255, 255, .76);
+}
+
+body.app-shell[data-theme="light"] .settings-action-card,
+body.app-shell[data-theme="light"] .settings-list-row,
+body.app-shell[data-theme="light"] .settings-empty-state {
+    background: rgba(255, 255, 255, .82);
+}
+
+body.app-shell[data-theme="light"] .settings-empty-state { border-color: #aab7c1; }
+
+body.app-shell[data-theme="light"] .app-shell .btn-outline-light,
+body.app-shell[data-theme="light"] .btn-outline-light {
+    color: var(--app-copy);
+    border-color: #7f909c;
+}
+
+body.app-shell[data-theme="light"] .app-shell .btn-outline-light:hover,
+body.app-shell[data-theme="light"] .btn-outline-light:hover {
+    color: var(--app-copy);
+    background: rgba(28, 43, 54, .08);
+}
+
 body.app-shell[data-accent="cyan"] { --app-accent: #22c7d7; --app-accent-rgb: 34, 199, 215; }
 body.app-shell[data-accent="teal"] { --app-accent: #38c99b; --app-accent-rgb: 56, 201, 155; }
 body.app-shell[data-accent="amber"] { --app-accent: #f0b44c; --app-accent-rgb: 240, 180, 76; }

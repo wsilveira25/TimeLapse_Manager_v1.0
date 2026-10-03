@@ -9,6 +9,7 @@ const PREFERENCIAS_KEY = 'timelapse.preferences.v1';
 const SETTINGS_VIEW_KEY = 'timelapse.settings.active-view';
 const CORES_DESTAQUE = new Set(['cyan', 'teal', 'amber', 'coral']);
 const FUNDOS_PAINEL = new Set(['deep-blue', 'graphite', 'forest']);
+const TEMAS = new Set(['dark', 'light']);
 const SETTINGS_VIEWS = new Set(['overview', 'cameras', 'storage', 'alerts', 'users', 'account', 'preferences']);
 
 function ativarViewConfiguracoes(view) {
@@ -43,8 +44,10 @@ function obterPreferencias() {
 function aplicarPreferencias(preferencias = obterPreferencias()) {
     const accent = CORES_DESTAQUE.has(preferencias.accent) ? preferencias.accent : 'cyan';
     const background = FUNDOS_PAINEL.has(preferencias.background) ? preferencias.background : 'deep-blue';
+    const theme = TEMAS.has(preferencias.theme) ? preferencias.theme : 'dark';
     document.body.dataset.accent = accent;
     document.body.dataset.background = background;
+    document.body.dataset.theme = theme;
     const backgroundImage = typeof preferencias.backgroundImage === 'string'
         && /^data:image\/(jpeg|png|webp);base64,[a-z0-9+/=]+$/i.test(preferencias.backgroundImage)
         ? preferencias.backgroundImage
@@ -61,6 +64,8 @@ function aplicarPreferencias(preferencias = obterPreferencias()) {
     });
     const backgroundSelect = document.getElementById('background-choice');
     if (backgroundSelect) backgroundSelect.value = background;
+    const themeSelect = document.getElementById('theme-choice');
+    if (themeSelect) themeSelect.value = theme;
     const preview = document.getElementById('background-image-preview');
     const removeButton = document.getElementById('remove-background-image');
     if (preview) {
@@ -936,6 +941,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     document.getElementById('background-choice')?.addEventListener('change', (event) => {
         guardarPreferencias({ background: event.target.value });
+    });
+
+    document.getElementById('theme-choice')?.addEventListener('change', (event) => {
+        guardarPreferencias({ theme: event.target.value });
     });
 
     document.getElementById('reset-preferences')?.addEventListener('click', () => {

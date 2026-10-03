@@ -217,8 +217,70 @@ def _atualizar_cache_status_armazenamento():
             _STORAGE_STATUS_REFRESHING = False
 
 
+def _montar_status_rapido_armazenamento(db: Session):
+    total, used, free = shutil.disk_usage(TEMP_DIR)
+    local_summary = build_provider_summary(
+        nome="Armazenamento Local",
+        total_bytes=total,
+        usado_bytes=used,
+        ativo=True,
+        tipo="local",
+    )
+    livre_ratio = free / total if total else 0
+    if livre_ratio <= 0.05:
+        local_summary["alerta"] = "Espaço crítico: novas capturas estão pausadas até liberar disco."
+        local_summary["alerta_tipo"] = "danger"
+    elif livre_ratio < 0.20:
+        local_summary["alerta"] = "Pouco espaço livre. A limpeza verifica cópias remotas antes de remover arquivos locais com mais de 30 dias."
+        local_summary["alerta_tipo"] = "warning"
+
+    provedores = [local_summary]
+    for config in db.query(StorageConfig).all():
+        tipo = (config.tipo or "").lower()
+        if tipo not in {"google_drive", "onedrive", "smb", "ftp", "webdav"}:
+            continue
+
+        conectado = bool(config.oauth_refresh_token) if tipo in {"google_drive", "onedrive"} else bool(config.host)
+        provider = build_provider_summary(
+            nome=config.nome if config.nome and config.nome != "Armazenamento" else _nome_padrao_storage(tipo),
+            total_bytes=int(config.total_bytes or 0),
+            usado_bytes=int(config.usado_bytes or 0),
+            ativo=bool(config.ativo),
+            tipo=tipo,
+            conectado=conectado,
+        )
+        provider["id"] = config.id
+        provider["destino"] = _destino_storage(config)
+        provider["erro"] = config.storage_error or ""
+        provider["backup_ultimo_sucesso"] = int(config.backup_last_success_at or 0)
+        provider["backup_erro"] = resumir_erro_backup(config.backup_error)
+        capturas_backupeadas = contar_frames_no_backup(db, config.id)
+        provider["capturas_backupeadas"] = capturas_backupeadas
+        provider["calculo_previo"] = build_storage_forecast(
+            provider["total_bytes"],
+            provider["livre_bytes"],
+            TAMANHO_PADRAO_FALLBACK,
+            capturas_backupeadas,
+        )
+        provedores.append(provider)
+
+    return {
+        "disco": local_summary,
+        "calculo_previo": {
+            "capturas_realizadas": None,
+            "capturas_restantes": None,
+            "capturas_totais": None,
+            "tamanho_medio_kb": None,
+        },
+        "backup_progresso": obter_status_backup(),
+        "provedores": provedores,
+        "metricas_status": "atualizando",
+        "metricas_atualizadas_em": None,
+    }
+
+
 @router.get("/storage", dependencies=[Depends(require_admin)])
-def obter_status_armazenamento():
+def obter_status_armazenamento(db: Session = Depends(get_db)):
     global _STORAGE_STATUS_REFRESHING
     now = time.monotonic()
     with _STORAGE_STATUS_LOCK:
@@ -239,27 +301,7 @@ def obter_status_armazenamento():
         snapshot["metricas_atualizadas_em"] = int(time.time() - (now - updated_at)) if updated_at else None
         return snapshot
 
-    total, used, free = shutil.disk_usage(TEMP_DIR)
-    local_summary = build_provider_summary(
-        nome="Armazenamento Local",
-        total_bytes=total,
-        usado_bytes=used,
-        ativo=True,
-        tipo="local",
-    )
-    return {
-        "disco": local_summary,
-        "calculo_previo": {
-            "capturas_realizadas": None,
-            "capturas_restantes": None,
-            "capturas_totais": None,
-            "tamanho_medio_kb": None,
-        },
-        "backup_progresso": obter_status_backup(),
-        "provedores": [local_summary],
-        "metricas_status": "atualizando",
-        "metricas_atualizadas_em": None,
-    }
+    return _montar_status_rapido_armazenamento(db)
 
 
 def _nome_padrao_storage(tipo: str) -> str:
