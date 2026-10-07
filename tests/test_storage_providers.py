@@ -1,6 +1,8 @@
 import unittest
 import os
 import tempfile
+from datetime import date
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
 
@@ -15,6 +17,7 @@ from app.models.storage import StorageBackupFile, StorageConfig, SystemSettings
 from app.models.user import SystemUser
 from app.routers import system as system_router
 from app.routers import users as users_router
+from app.routers import cameras as cameras_router
 from app.routers.system import build_provider_summary, resumir_erro_backup
 from app.services import alert_service, backup_service, capture_service, cloud_storage
 from app.services.cloud_storage import (
@@ -339,6 +342,51 @@ class StorageProviderSummaryTests(unittest.TestCase):
         self.assertIsNone(response['calculo_previo']['capturas_realizadas'])
         self.assertEqual([item['tipo'] for item in response['provedores']], ['local', 'smb'])
         self.assertEqual(response['provedores'][1]['destino'], r'\\192.168.0.6\capturas')
+
+    def test_camera_media_lists_captures_and_videos_and_rejects_traversal(self):
+        engine = create_engine('sqlite:///:memory:')
+        Base.metadata.create_all(engine)
+        TestSession = sessionmaker(bind=engine)
+        with tempfile.TemporaryDirectory() as root, TestSession() as db:
+            camera = Camera(nome='Entrada', ip='192.0.2.10', usuario='user', senha='pass')
+            db.add(camera)
+            db.flush()
+
+            capture_dir = Path(root) / 'Capturas' / f'camera_{camera.id}' / '01102026'
+            capture_dir.mkdir(parents=True)
+            (capture_dir / 'frame_20261001_100000.jpg').write_bytes(b'first-frame')
+            (capture_dir / 'frame_20261001_110000.jpg').write_bytes(b'last-frame')
+            video_dir = Path(root) / 'Videos' / f'camera_{camera.id}' / '01102026'
+            video_dir.mkdir(parents=True)
+            video_path = video_dir / 'timelapse_20261001_120000.mp4'
+            video_path.write_bytes(b'test-video')
+
+            with patch.object(cameras_router, 'TEMP_DIR', Path(root)):
+                media = cameras_router.listar_midias_camera(camera.id, db)
+                daily_frames = cameras_router.listar_capturas_data(camera.id, date(2026, 10, 1), db)
+                video_response = cameras_router.servir_video_camera(
+                    camera.id,
+                    '01102026/timelapse_20261001_120000.mp4',
+                    db,
+                )
+                with self.assertRaises(HTTPException):
+                    cameras_router._camera_media_path(
+                        camera.id,
+                        'Capturas',
+                        '../camera_999/frame_20261001_100000.jpg',
+                    )
+
+        engine.dispose()
+        self.assertEqual(media['capturas']['total'], 2)
+        self.assertEqual(len(media['capturas']['amostras']), 2)
+        self.assertEqual(media['capturas']['dias'], [{'data': '2026-10-01', 'total': 2}])
+        self.assertEqual(media['armazenamento']['camera_bytes'], len(b'first-frame') + len(b'last-frame'))
+        self.assertGreater(media['armazenamento']['disco_total_bytes'], 0)
+        self.assertEqual(daily_frames['data'], '2026-10-01')
+        self.assertEqual(len(daily_frames['frames']), 2)
+        self.assertEqual(len(media['videos']), 1)
+        self.assertEqual(media['videos'][0]['nome'], 'timelapse_20261001_120000.mp4')
+        self.assertEqual(Path(video_response.path), video_path)
 
     def test_backup_error_summary_does_not_expose_technical_details(self):
         message = resumir_erro_backup(

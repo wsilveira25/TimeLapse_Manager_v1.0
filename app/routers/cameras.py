@@ -1,8 +1,12 @@
 import cv2
+import mimetypes
+import shutil
 import tempfile
-from datetime import datetime
+from datetime import date, datetime
+from pathlib import Path
+from urllib.parse import quote
 from fastapi import APIRouter, HTTPException, Depends
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Optional
@@ -96,6 +100,141 @@ def salvar_camera(camera: CameraCreate, db: Session = Depends(get_db)):
 @router.get("/", response_model=List[CameraResponse], dependencies=[Depends(require_admin)])
 def listar_cameras(db: Session = Depends(get_db)):
     return db.query(Camera).all()
+
+
+def _timestamp_arquivo_frame(path: Path) -> float:
+    try:
+        return datetime.strptime(path.stem.removeprefix("frame_"), "%Y%m%d_%H%M%S").timestamp()
+    except ValueError:
+        return path.stat().st_mtime
+
+
+@router.get("/{camera_id}/media", dependencies=[Depends(require_admin)])
+def listar_midias_camera(camera_id: int, db: Session = Depends(get_db)):
+    camera = db.query(Camera).filter(Camera.id == camera_id).first()
+    if not camera:
+        raise HTTPException(status_code=404, detail="Câmera não encontrada.")
+
+    captures_root = (TEMP_DIR / "Capturas" / f"camera_{camera_id}").resolve()
+    frames = sorted(
+        (path for path in captures_root.rglob("frame_*.jpg") if path.is_file()),
+        key=_timestamp_arquivo_frame,
+    ) if captures_root.is_dir() else []
+    days = {}
+    camera_capture_bytes = 0
+    for path in frames:
+        timestamp = _timestamp_arquivo_frame(path)
+        day = datetime.fromtimestamp(timestamp).date().isoformat()
+        days.setdefault(day, {"data": day, "total": 0})["total"] += 1
+        camera_capture_bytes += path.stat().st_size
+
+    disk_total, disk_used, disk_free = shutil.disk_usage(TEMP_DIR)
+    sample_count = min(len(frames), 9)
+    sample_indexes = sorted({round(index * (len(frames) - 1) / max(sample_count - 1, 1)) for index in range(sample_count)})
+    capture_items = []
+    for index in sample_indexes:
+        path = frames[index]
+        relative_path = path.relative_to(captures_root).as_posix()
+        capture_items.append({
+            "url": f"/api/cameras/{camera_id}/frames/{quote(relative_path, safe='/')}" ,
+            "timestamp": _timestamp_arquivo_frame(path),
+        })
+
+    videos_root = (TEMP_DIR / "Videos" / f"camera_{camera_id}").resolve()
+    video_items = []
+    if videos_root.is_dir():
+        video_paths = sorted(
+            (path for path in videos_root.rglob("*") if path.is_file() and path.suffix.lower() in {".mp4", ".mkv", ".avi"}),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        for path in video_paths[:50]:
+            relative_path = path.relative_to(videos_root).as_posix()
+            stat = path.stat()
+            video_items.append({
+                "nome": path.name,
+                "url": f"/api/cameras/{camera_id}/videos/{quote(relative_path, safe='/')}" ,
+                "timestamp": stat.st_mtime,
+                "tamanho_bytes": stat.st_size,
+                "formato": path.suffix.lstrip(".").upper(),
+            })
+
+    return {
+        "camera": {
+            "id": camera.id,
+            "nome": camera.nome,
+            "ip": camera.ip,
+            "ativa": camera.ativa,
+            "resolucao": camera.resolucao or "Não informada",
+            "intervalo_minutos": camera.intervalo_minutos,
+            "qualidade_captura": camera.qualidade_captura,
+        },
+        "capturas": {
+            "total": len(frames),
+            "primeira": _timestamp_arquivo_frame(frames[0]) if frames else None,
+            "ultima": _timestamp_arquivo_frame(frames[-1]) if frames else None,
+            "dias": list(days.values()),
+            "amostras": capture_items,
+        },
+        "armazenamento": {
+            "camera_bytes": camera_capture_bytes,
+            "disco_total_bytes": disk_total,
+            "disco_usado_bytes": disk_used,
+            "disco_livre_bytes": disk_free,
+            "disco_percentual_usado": round(disk_used / disk_total * 100, 1) if disk_total else 0,
+        },
+        "videos": video_items,
+    }
+
+
+@router.get("/{camera_id}/frames", dependencies=[Depends(require_admin)])
+def listar_capturas_data(camera_id: int, data: date, db: Session = Depends(get_db)):
+    if not db.query(Camera.id).filter(Camera.id == camera_id).first():
+        raise HTTPException(status_code=404, detail="Câmera não encontrada.")
+    captures_root = (TEMP_DIR / "Capturas" / f"camera_{camera_id}").resolve()
+    day_directory = captures_root / data.strftime("%d%m%Y")
+    paths = sorted(
+        (path for path in day_directory.glob("frame_*.jpg") if path.is_file()),
+        key=_timestamp_arquivo_frame,
+    ) if day_directory.is_dir() else []
+    return {
+        "data": data.isoformat(),
+        "total": len(paths),
+        "frames": [
+            {
+                "url": f"/api/cameras/{camera_id}/frames/{quote(path.relative_to(captures_root).as_posix(), safe='/')}",
+                "timestamp": _timestamp_arquivo_frame(path),
+            }
+            for path in paths
+        ],
+    }
+
+
+def _camera_media_path(camera_id: int, media_type: str, relative_path: str) -> Path:
+    base = (TEMP_DIR / media_type / f"camera_{camera_id}").resolve()
+    requested = (base / relative_path).resolve()
+    if base not in requested.parents or not requested.is_file():
+        raise HTTPException(status_code=404, detail="Arquivo de mídia não encontrado.")
+    return requested
+
+
+@router.get("/{camera_id}/frames/{relative_path:path}", dependencies=[Depends(require_admin)])
+def servir_captura_camera(camera_id: int, relative_path: str, db: Session = Depends(get_db)):
+    if not db.query(Camera.id).filter(Camera.id == camera_id).first():
+        raise HTTPException(status_code=404, detail="Câmera não encontrada.")
+    path = _camera_media_path(camera_id, "Capturas", relative_path)
+    if path.suffix.lower() != ".jpg" or not path.name.startswith("frame_"):
+        raise HTTPException(status_code=404, detail="Captura não encontrada.")
+    return FileResponse(path, media_type="image/jpeg")
+
+
+@router.get("/{camera_id}/videos/{relative_path:path}", dependencies=[Depends(require_admin)])
+def servir_video_camera(camera_id: int, relative_path: str, db: Session = Depends(get_db)):
+    if not db.query(Camera.id).filter(Camera.id == camera_id).first():
+        raise HTTPException(status_code=404, detail="Câmera não encontrada.")
+    path = _camera_media_path(camera_id, "Videos", relative_path)
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return FileResponse(path, media_type=media_type)
 
 # ==========================================
 # ROTA DE PREVIEW (STREAMING DE VÍDEO)

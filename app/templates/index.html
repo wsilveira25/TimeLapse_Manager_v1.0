@@ -6,7 +6,7 @@
     <title>Timelapse Manager</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=2">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=7">
     <style>
         /* Custom styles for form text */
         .form-text { color:#444a50; } /* Custom color for form text *
@@ -148,7 +148,7 @@
             <!-- Câmeras injetadas via JS -->
         </div>
     </div> <!-- Fim do Container -->
-    <footer class="container py-3 text-end small text-light opacity-50">{{ developer_signature }}</footer>
+    <footer class="app-footer">Desenvolvido por Weslley J. Silveira®</footer>
 
     <div class="modal fade" id="modalSettings" tabindex="-1" aria-labelledby="settings-title">
         <div class="modal-dialog modal-fullscreen">
@@ -361,6 +361,74 @@
             </div>
         </div>
     </div>
+
+    {% if is_admin %}
+    <div class="modal fade" id="cameraDetailsModal" tabindex="-1" aria-labelledby="camera-detail-title" aria-hidden="true">
+        <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable camera-detail-dialog">
+            <div class="modal-content camera-detail-modal">
+                <header class="camera-detail-header">
+                    <div>
+                        <small class="camera-detail-eyebrow">PAINEL DA CÂMERA</small>
+                        <h2 id="camera-detail-title" class="h3 mb-0">Câmera</h2>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-outline-light" data-bs-dismiss="modal" aria-label="Fechar detalhes da câmera"><i class="fa-solid fa-xmark"></i></button>
+                </header>
+                <div class="modal-body camera-detail-body">
+                    <section class="camera-detail-overview">
+                        <div>
+                            <div id="camera-detail-meta" class="camera-detail-meta"></div>
+                            <div class="camera-detail-storage">
+                                <div class="camera-detail-storage-heading"><strong>Espaço utilizado</strong><span id="camera-detail-space-label">Calculando…</span></div>
+                                <div class="progress camera-detail-storage-progress" role="progressbar" aria-label="Espaço usado no disco" aria-valuemin="0" aria-valuemax="100">
+                                    <div id="camera-detail-space-bar" class="progress-bar" style="width:0%">0%</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="camera-detail-preview-wrap">
+                            <div class="camera-detail-preview-top"><span><i class="fa-solid fa-camera me-2"></i>VISUALIZAÇÃO</span><time id="camera-detail-preview-state">Última captura</time></div>
+                            <div class="camera-detail-preview-media">
+                                <img id="camera-detail-frame" class="camera-detail-preview" alt="Captura selecionada da câmera" loading="lazy">
+                                <div class="camera-detail-live-poster" id="camera-detail-live-poster">
+                                    <button type="button" class="camera-detail-live" id="camera-detail-live" aria-label="Iniciar visualização ao vivo" title="Iniciar visualização ao vivo"><i class="fa-solid fa-play"></i></button>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="camera-detail-section">
+                        <div class="camera-detail-section-heading">
+                            <div><h3 class="h5 mb-1">Linha do tempo de capturas</h3><p class="mb-0"><span id="camera-detail-capture-count">0</span> capturas armazenadas</p></div>
+                            <span id="camera-detail-day-label" class="camera-detail-counter">Selecione uma data</span>
+                        </div>
+                        <div class="camera-date-timeline">
+                            <span id="camera-detail-first-day">—</span>
+                            <input type="range" id="camera-detail-day-range" class="form-range" min="0" max="0" value="0" disabled aria-label="Selecionar data das capturas">
+                            <span id="camera-detail-last-day">—</span>
+                        </div>
+                        <div class="camera-timeline-control">
+                            <button type="button" id="camera-detail-prev-frame" class="btn btn-sm btn-outline-light" aria-label="Captura anterior" disabled><i class="fa-solid fa-chevron-left"></i></button>
+                            <input type="range" id="camera-detail-frame-range" class="form-range" min="0" max="0" value="0" disabled aria-label="Navegar pelas capturas">
+                            <span id="camera-detail-frame-counter" class="camera-detail-counter">0 / 0</span>
+                            <button type="button" id="camera-detail-next-frame" class="btn btn-sm btn-outline-light" aria-label="Próxima captura" disabled><i class="fa-solid fa-chevron-right"></i></button>
+                        </div>
+                        <div id="camera-detail-gallery" class="camera-frame-gallery" aria-live="polite"></div>
+                    </section>
+
+                    <section class="camera-detail-section camera-videos-section">
+                        <div class="camera-detail-section-heading"><div><h3 class="h5 mb-1">Vídeos timelapse</h3><p class="mb-0">Reproduza os vídeos já gerados para esta câmera.</p></div><span id="camera-detail-video-count" class="camera-detail-counter">0</span></div>
+                        <div class="camera-videos-layout">
+                            <div id="camera-detail-videos" class="camera-video-list" aria-live="polite"></div>
+                            <div id="camera-detail-player-wrap" class="camera-detail-player-wrap d-none">
+                                <div id="camera-detail-playing-title" class="camera-detail-playing-title"></div>
+                                <video id="camera-detail-player" controls preload="metadata" playsinline></video>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
 
     <!-- Modal Preview de Vídeo -->
     <div class="modal fade" id="modalPreview" tabindex="-1">
@@ -617,6 +685,6 @@
     </div>
     <!-- SCRIPTS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="/static/js/main.js?v=2"></script>
+    <script src="/static/js/main.js?v=5"></script>
 </body>
 </html>

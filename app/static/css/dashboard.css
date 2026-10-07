@@ -16,6 +16,20 @@ body.app-shell {
     color: var(--app-copy);
     isolation: isolate;
     background: transparent;
+    padding-bottom: 42px;
+}
+
+.app-footer {
+    position: fixed;
+    z-index: 20;
+    right: max(12px, calc((100vw - 1480px) / 2));
+    bottom: 0;
+    padding: 8px 12px;
+    color: var(--app-muted);
+    font-size: 1.15rem;
+    text-align: right;
+    pointer-events: none;
+    background: transparent;
 }
 
 body.app-shell::before {
@@ -24,16 +38,16 @@ body.app-shell::before {
     z-index: -1;
     inset: -18px;
     pointer-events: none;
-    background: linear-gradient(145deg, var(--app-page), var(--app-page-edge));
+    /*background: linear-gradient(145deg, var(--app-page), var(--app-page-edge));*/
     background-position: center;
     background-size: cover;
-    filter: blur(18px);
-    transform: scale(1.035);
+    filter: blur(2px);
+    transform: scale(1.0);
     transition: background-image 180ms ease, opacity 180ms ease;
 }
 
 body.app-shell[data-background-image="custom"]::before {
-    background-image: linear-gradient(135deg, rgba(10, 17, 25, .58), rgba(11, 18, 28, .72)), var(--user-background-image);
+    background-image: linear-gradient(135deg, rgba(10, 17, 25, .24), rgba(11, 18, 28, .34)), var(--user-background-image);
 }
 
 body.app-shell[data-background="graphite"] {
@@ -72,7 +86,7 @@ body.app-shell[data-theme="light"]::before {
 }
 
 body.app-shell[data-theme="light"][data-background-image="custom"]::before {
-    background-image: linear-gradient(135deg, rgba(244, 248, 250, .72), rgba(237, 243, 247, .82)), var(--user-background-image);
+    background-image: linear-gradient(135deg, rgba(244, 248, 250, .22), rgba(237, 243, 247, .32)), var(--user-background-image);
 }
 
 body.app-shell[data-theme="light"] .navbar {
@@ -97,8 +111,10 @@ body.app-shell[data-theme="light"] .text-white {
 }
 
 body.app-shell[data-theme="light"] .card {
-    background: rgba(255, 255, 255, .88) !important;
+    background: rgba(255, 255, 255, .62) !important;
     box-shadow: 0 10px 26px rgba(28, 43, 54, .09) !important;
+    backdrop-filter: blur(2px) saturate(125%);
+    -webkit-backdrop-filter: blur(2px) saturate(125%);
 }
 
 body.app-shell[data-theme="light"] .form-control,
@@ -112,8 +128,10 @@ body.app-shell[data-theme="light"] .form-control::placeholder { color: #657580; 
 body.app-shell[data-theme="light"] .form-text { color: #526371; }
 
 body.app-shell[data-theme="light"] .settings-modal {
-    background-color: rgba(248, 250, 251, .97);
-    background-image: linear-gradient(145deg, rgba(248, 250, 251, .94), rgba(236, 242, 246, .96));
+    background-color: rgba(248, 250, 251, .72);
+    background-image: linear-gradient(145deg, rgba(248, 250, 251, .66), rgba(236, 242, 246, .76));
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
 }
 
 body.app-shell[data-theme="light"] .settings-header,
@@ -125,7 +143,9 @@ body.app-shell[data-theme="light"] .settings-content {
 body.app-shell[data-theme="light"] .settings-action-card,
 body.app-shell[data-theme="light"] .settings-list-row,
 body.app-shell[data-theme="light"] .settings-empty-state {
-    background: rgba(255, 255, 255, .82);
+    background: rgba(255, 255, 255, .62);
+    backdrop-filter: blur(2px) saturate(120%);
+    -webkit-backdrop-filter: blur(2px) saturate(120%);
 }
 
 body.app-shell[data-theme="light"] .settings-empty-state { border-color: #aab7c1; }
@@ -150,7 +170,7 @@ body.app-shell[data-accent="coral"] { --app-accent: #ef806e; --app-accent-rgb: 2
 .app-shell .navbar {
     background: rgba(18, 25, 33, 0.94) !important;
     border-bottom: 1px solid var(--app-border);
-    backdrop-filter: blur(12px);
+    backdrop-filter: blur(2px);
 }
 
 .app-shell .container {
@@ -173,11 +193,11 @@ body.app-shell[data-accent="coral"] { --app-accent: #ef806e; --app-accent-rgb: 2
 .app-shell .progress-bar { background-color: var(--app-accent) !important; }
 .app-shell .card {
     color: var(--app-copy);
-    background: rgba(27, 38, 51, .56) !important;
+    background: rgba(27, 38, 51, .42) !important;
     border: 1px solid var(--app-border) !important;
     box-shadow: 0 12px 28px rgba(0, 0, 0, .22) !important;
-    backdrop-filter: blur(22px) saturate(125%);
-    -webkit-backdrop-filter: blur(22px) saturate(125%);
+    backdrop-filter: blur(2px) saturate(125%);
+    -webkit-backdrop-filter: blur(2px) saturate(125%);
 }
 .app-shell .card-body { color: var(--app-copy); } 
 .app-shell .form-control {
@@ -207,12 +227,12 @@ body.app-shell[data-accent="coral"] { --app-accent: #ef806e; --app-accent-rgb: 2
     color: var(--app-copy);
     background-color: var(--app-page);
     background-image:
-        linear-gradient(135deg, rgba(10, 17, 25, .58), rgba(11, 18, 28, .72)),
+        linear-gradient(135deg, rgba(10, 17, 25, .24), rgba(11, 18, 28, .34)),
         var(--user-background-image, linear-gradient(145deg, var(--app-page), var(--app-page-edge)));
     background-position: center;
     background-size: cover;
-    backdrop-filter: blur(22px) saturate(120%);
-    -webkit-backdrop-filter: blur(22px) saturate(120%);
+    backdrop-filter: blur(2px) saturate(120%);
+    -webkit-backdrop-filter: blur(2px) saturate(120%);
 }
 
 .settings-header {
@@ -222,10 +242,10 @@ body.app-shell[data-accent="coral"] { --app-accent: #ef806e; --app-accent-rgb: 2
     justify-content: space-between;
     gap: 16px;
     padding: 12px 24px;
-    background: rgba(27, 38, 51, .48);
+    background: rgba(27, 38, 51, .40);
     border-bottom: 1px solid var(--app-border);
-    backdrop-filter: blur(22px);
-    -webkit-backdrop-filter: blur(22px);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
 }
 
 .settings-workspace {
@@ -239,10 +259,10 @@ body.app-shell[data-accent="coral"] { --app-accent: #ef806e; --app-accent-rgb: 2
     grid-column: 1;
     grid-row: 1;
     padding: 24px 14px;
-    background: rgba(21, 29, 38, .48);
+    background: rgba(21, 29, 38, .40);
     border-right: 1px solid var(--app-border);
-    backdrop-filter: blur(22px) saturate(120%);
-    -webkit-backdrop-filter: blur(22px) saturate(120%);
+    backdrop-filter: blur(2px) saturate(120%);
+    -webkit-backdrop-filter: blur(2px) saturate(120%);
 }
 
 .settings-nav-button {
@@ -274,9 +294,9 @@ body.app-shell[data-accent="coral"] { --app-accent: #ef806e; --app-accent-rgb: 2
     min-width: 0;
     overflow-y: auto;
     padding: 32px clamp(20px, 5vw, 64px);
-    background: rgba(18, 27, 38, .26);
-    backdrop-filter: blur(18px) saturate(115%);
-    -webkit-backdrop-filter: blur(18px) saturate(115%);
+    background: rgba(18, 27, 38, .20);
+    backdrop-filter: blur(2px) saturate(115%);
+    -webkit-backdrop-filter: blur(2px) saturate(115%);
 }
 
 .settings-view { display: none; max-width: 920px; margin: 0 auto; }
@@ -287,11 +307,11 @@ body.app-shell[data-accent="coral"] { --app-accent: #ef806e; --app-accent-rgb: 2
 .settings-action-card {
     height: 100%;
     padding: 20px;
-    background: rgba(27, 38, 51, .38);
+    background: rgba(27, 38, 51, .34);
     border: 1px solid var(--app-border);
     border-radius: 7px;
-    backdrop-filter: blur(22px) saturate(120%);
-    -webkit-backdrop-filter: blur(22px) saturate(120%);
+    backdrop-filter: blur(2px) saturate(120%);
+    -webkit-backdrop-filter: blur(2px) saturate(120%);
 }
 
 .settings-action-icon {
@@ -332,11 +352,11 @@ body.app-shell[data-accent="coral"] { --app-accent: #ef806e; --app-accent-rgb: 2
     padding: 28px;
     color: var(--app-muted);
     text-align: center;
-    background: rgba(27, 38, 51, .38);
+    background: rgba(27, 38, 51, .34);
     border: 1px dashed #526170;
     border-radius: 7px;
-    backdrop-filter: blur(22px);
-    -webkit-backdrop-filter: blur(22px);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
 }
 
 .settings-list { display: grid; gap: 10px; }
@@ -347,11 +367,11 @@ body.app-shell[data-accent="coral"] { --app-accent: #ef806e; --app-accent-rgb: 2
     justify-content: space-between;
     gap: 16px;
     padding: 14px 16px;
-    background: rgba(27, 38, 51, .38);
+    background: rgba(27, 38, 51, .34);
     border: 1px solid var(--app-border);
     border-radius: 7px;
-    backdrop-filter: blur(22px) saturate(120%);
-    -webkit-backdrop-filter: blur(22px) saturate(120%);
+    backdrop-filter: blur(2px) saturate(120%);
+    -webkit-backdrop-filter: blur(2px) saturate(120%);
 }
 
 .settings-list-meta { color: var(--app-muted); font-size: .875rem; }
@@ -376,11 +396,87 @@ body.app-shell[data-accent="coral"] { --app-accent: #ef806e; --app-accent-rgb: 2
 
 .app-shell .modal-content {
     color: var(--app-copy);
-    background: rgba(27, 38, 51, .9);
+    background: rgba(27, 38, 51, .68);
     border: 1px solid var(--app-border);
-    backdrop-filter: blur(22px);
-    -webkit-backdrop-filter: blur(22px);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
 }
+
+.camera-detail-dialog { max-width: 1180px; }
+.camera-detail-modal { max-height: 92vh; overflow: hidden; }
+.camera-detail-header,
+.camera-detail-section-heading,
+.camera-detail-preview-top,
+.camera-timeline-control {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+}
+.camera-detail-header {
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--app-border);
+}
+.camera-detail-eyebrow { display: block; margin-bottom: 5px; color: var(--app-accent); font-size: .7rem; font-weight: 700; letter-spacing: .08em; }
+.camera-detail-body { display: grid; gap: 22px; padding: 24px; }
+.camera-detail-overview { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, .9fr); gap: 24px; align-items: center; }
+.camera-detail-meta { display: grid; gap: 10px; color: var(--app-copy); }
+.camera-detail-storage { display: grid; gap: 8px; margin-top: 20px; }
+.camera-detail-storage-heading { display: grid; gap: 4px; color: var(--app-muted); font-size: .8rem; }
+.camera-detail-storage-heading strong { color: var(--app-copy); font-size: .9rem; }
+.camera-detail-storage-progress { height: 22px; background: rgba(0, 0, 0, .28); }
+.camera-detail-storage-progress .progress-bar { min-width: 36px; font-size: .7rem; font-weight: 700; }
+.camera-detail-preview-wrap { position: relative; overflow: hidden; background: rgba(0, 0, 0, .18); border: 1px solid var(--app-border); border-radius: 9px; }
+.camera-detail-preview-top { padding: 9px 12px; color: var(--app-muted); font-size: .72rem; }
+.camera-detail-preview-top time { text-align: right; }
+.camera-detail-preview-media { position: relative; overflow: hidden; }
+.camera-detail-preview { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #101820; }
+.camera-detail-live-poster { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(5, 11, 18, .3); transition: background .16s ease; }
+.camera-detail-live-poster:hover { background: rgba(5, 11, 18, .4); }
+.camera-detail-live-poster[hidden] { display: none !important; }
+.camera-detail-live { display: grid; place-items: center; width: 62px; height: 62px; padding: 0; color: #101820; background: rgba(var(--app-accent-rgb), .94); border: 2px solid rgba(255, 255, 255, .88); border-radius: 50%; box-shadow: 0 4px 20px rgba(0, 0, 0, .32); font-size: 1.3rem; transition: transform .15s ease, background .15s ease; }
+.camera-detail-live:hover { transform: scale(1.07); }
+.camera-detail-live:disabled { opacity: .45; cursor: not-allowed; }
+.camera-detail-section { min-width: 0; padding-top: 18px; border-top: 1px solid var(--app-border); }
+.camera-detail-section-heading p { color: var(--app-muted); font-size: .85rem; }
+.camera-detail-counter { flex: 0 0 auto; padding: 5px 9px; color: var(--app-copy); background: rgba(var(--app-accent-rgb), .12); border-radius: 5px; font-size: .8rem; }
+.camera-date-timeline { display: grid; grid-template-columns: auto minmax(80px, 1fr) auto; align-items: center; gap: 12px; margin: 14px 0 8px; color: var(--app-muted); font-size: .76rem; }
+.camera-date-timeline .form-range { margin: 0; }
+.camera-timeline-control { justify-content: flex-start; margin: 10px 0; }
+.camera-timeline-control .form-range { flex: 1; margin: 0; }
+.camera-frame-gallery { display: flex; gap: 10px; overflow-x: auto; padding: 4px 2px 10px; }
+.camera-frame-thumb { position: relative; flex: 0 0 142px; padding: 4px; overflow: hidden; color: var(--app-copy); background: rgba(27, 38, 51, .34); border: 1px solid var(--app-border); border-radius: 7px; text-align: left; }
+.camera-frame-thumb.active { border-color: var(--app-accent); box-shadow: 0 0 0 1px var(--app-accent); }
+.camera-frame-thumb img { display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: cover; border-radius: 4px; }
+.camera-frame-thumb span { display: block; padding: 5px 2px 1px; font-size: .68rem; }
+.camera-videos-layout { display: grid; grid-template-columns: minmax(250px, .8fr) minmax(0, 1.2fr); gap: 16px; }
+.camera-video-list { display: grid; align-content: start; gap: 8px; max-height: 340px; overflow-y: auto; }
+.camera-video-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px; color: var(--app-copy); background: rgba(27, 38, 51, .34); border: 1px solid var(--app-border); border-radius: 7px; text-align: left; }
+.camera-video-row:hover,
+.camera-video-row.active { border-color: var(--app-accent); background: rgba(var(--app-accent-rgb), .1); }
+.camera-video-icon { color: var(--app-accent); font-size: 1.1rem; }
+.camera-video-info { display: grid; min-width: 0; flex: 1; gap: 3px; }
+.camera-video-info strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.camera-video-info small { color: var(--app-muted); }
+.camera-video-play { color: var(--app-accent); }
+.camera-detail-player-wrap { min-width: 0; padding: 10px; background: rgba(27, 38, 51, .3); border: 1px solid var(--app-border); border-radius: 7px; }
+.camera-detail-playing-title { margin-bottom: 8px; overflow: hidden; color: var(--app-copy); font-size: .85rem; text-overflow: ellipsis; white-space: nowrap; }
+.camera-detail-player-wrap video { display: block; width: 100%; max-height: 340px; background: #080c10; border-radius: 5px; }
+.camera-media-empty,
+.camera-media-error { padding: 16px; color: var(--app-muted); background: rgba(27, 38, 51, .24); border: 1px dashed var(--app-border); border-radius: 7px; font-size: .9rem; }
+.camera-media-error { color: #b4453a; }
+.camera-summary-card { cursor: pointer; }
+.camera-summary-card:focus-visible { outline: 3px solid var(--app-accent); outline-offset: 3px; }
+
+body.app-shell[data-theme="light"] .camera-frame-thumb,
+body.app-shell[data-theme="light"] .camera-video-row,
+body.app-shell[data-theme="light"] .camera-detail-player-wrap,
+body.app-shell[data-theme="light"] .camera-media-empty { background: rgba(255, 255, 255, .58); }
+body.app-shell[data-theme="light"] .camera-detail-modal { background: rgba(248, 250, 251, .9); }
+body.app-shell[data-theme="light"] .camera-frame-thumb,
+body.app-shell[data-theme="light"] .camera-video-row,
+body.app-shell[data-theme="light"] .camera-detail-player-wrap { background: rgba(255, 255, 255, .58); }
+body.app-shell[data-theme="light"] .camera-detail-storage-progress { background: rgba(28, 43, 54, .14); }
 
 @media (max-width: 720px) {
     .settings-workspace {
@@ -403,4 +499,11 @@ body.app-shell[data-accent="coral"] { --app-accent: #ef806e; --app-accent-rgb: 2
     .settings-header { padding: 10px 14px; }
     .settings-preference-row { align-items: flex-start; flex-direction: column; }
     .settings-list-row { align-items: flex-start; flex-direction: column; }
+    .camera-detail-body { padding: 16px; }
+    .camera-detail-overview,
+    .camera-videos-layout { grid-template-columns: 1fr; }
+    .camera-detail-header { padding: 16px; }
+    .camera-detail-meta { grid-template-columns: 1fr 1fr; gap: 8px 14px; font-size: .9rem; }
+    .camera-date-timeline { gap: 7px; font-size: .68rem; }
+    .camera-frame-thumb { flex-basis: 116px; }
 }

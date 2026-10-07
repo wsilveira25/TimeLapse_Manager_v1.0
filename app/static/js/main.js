@@ -4,6 +4,13 @@
 let perfisConfiguracao = [];
 let perfisDescobertos = [];
 let camerasCache = [];
+let cameraDetalheAtual = null;
+let cameraFrameAtual = 0;
+let cameraDiaAtual = 0;
+let cameraFramesDoDia = [];
+let cameraFramesPorDia = new Map();
+let cameraDiaRequestId = 0;
+let cameraStreamAtivo = false;
 let settingsReturnView = null;
 const PREFERENCIAS_KEY = 'timelapse.preferences.v1';
 const SETTINGS_VIEW_KEY = 'timelapse.settings.active-view';
@@ -151,6 +158,204 @@ function renderSettingsUsers(users) {
         </article>
     `;
     }).join('');
+}
+
+function formatarDataMidia(timestamp) {
+    if (!timestamp) return 'Data não disponível';
+    return new Date(Number(timestamp) * 1000).toLocaleString('pt-BR');
+}
+
+function renderCapturaDetalhe(index) {
+    const captures = cameraFramesDoDia;
+    if (!captures.length) return;
+    cameraFrameAtual = Math.max(0, Math.min(index, captures.length - 1));
+    const capture = captures[cameraFrameAtual];
+    const preview = document.getElementById('camera-detail-frame');
+    if (preview && !cameraStreamAtivo) preview.src = capture.url;
+    const previewState = document.getElementById('camera-detail-preview-state');
+    if (previewState && !cameraStreamAtivo) previewState.textContent = `ÚLTIMA CAPTURA · ${formatarDataMidia(capture.timestamp)}`;
+    const range = document.getElementById('camera-detail-frame-range');
+    if (range) {
+        range.max = String(captures.length - 1);
+        range.value = String(cameraFrameAtual);
+        range.disabled = captures.length < 2;
+    }
+    document.getElementById('camera-detail-prev-frame').disabled = cameraFrameAtual <= 0;
+    document.getElementById('camera-detail-next-frame').disabled = cameraFrameAtual >= captures.length - 1;
+    const counter = document.getElementById('camera-detail-frame-counter');
+    if (counter) counter.textContent = `${cameraFrameAtual + 1} / ${captures.length}`;
+    document.querySelectorAll('[data-camera-frame-index]').forEach((button) => {
+        button.classList.toggle('active', Number(button.dataset.cameraFrameIndex) === cameraFrameAtual);
+    });
+    document.querySelector(`[data-camera-frame-index="${cameraFrameAtual}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+function renderGaleriaCapturasDia() {
+    const gallery = document.getElementById('camera-detail-gallery');
+    if (!cameraFramesDoDia.length) {
+        gallery.innerHTML = '<div class="camera-media-empty">Nenhuma captura neste dia.</div>';
+        return;
+    }
+    const thumbnailStep = Math.max(1, Math.ceil(cameraFramesDoDia.length / 24));
+    const thumbnailIndexes = new Set();
+    for (let index = 0; index < cameraFramesDoDia.length; index += thumbnailStep) thumbnailIndexes.add(index);
+    thumbnailIndexes.add(cameraFramesDoDia.length - 1);
+    thumbnailIndexes.add(cameraFrameAtual);
+    gallery.innerHTML = [...thumbnailIndexes].sort((left, right) => left - right).map((index) => {
+        const frame = cameraFramesDoDia[index];
+        return `
+            <button type="button" class="camera-frame-thumb${index === cameraFrameAtual ? ' active' : ''}" data-camera-frame-index="${index}" aria-label="Captura de ${escaparHtml(formatarDataMidia(frame.timestamp))}">
+                <img src="${escaparHtml(frame.url)}" alt="Captura de ${escaparHtml(formatarDataMidia(frame.timestamp))}" loading="lazy">
+                <span>${escaparHtml(new Date(Number(frame.timestamp) * 1000).toLocaleTimeString('pt-BR'))}</span>
+            </button>
+        `;
+    }).join('');
+}
+
+async function carregarCapturasDia(dayIndex, mostrarUltima = false) {
+    const days = cameraDetalheAtual?.capturas?.dias || [];
+    if (!days.length) return;
+    cameraDiaAtual = Math.max(0, Math.min(dayIndex, days.length - 1));
+    const day = days[cameraDiaAtual];
+    if (cameraStreamAtivo) {
+        cameraStreamAtivo = false;
+        document.getElementById('camera-detail-frame').src = cameraFramesDoDia[cameraFrameAtual]?.url || '';
+        document.getElementById('camera-detail-live-poster').hidden = false;
+    }
+    const dayRange = document.getElementById('camera-detail-day-range');
+    const dayLabel = document.getElementById('camera-detail-day-label');
+    if (dayRange) {
+        dayRange.max = String(days.length - 1);
+        dayRange.value = String(cameraDiaAtual);
+        dayRange.disabled = days.length < 2;
+    }
+    if (dayLabel) dayLabel.textContent = `${new Date(`${day.data}T12:00:00`).toLocaleDateString('pt-BR')} · ${Number(day.total).toLocaleString('pt-BR')} capturas`;
+
+    const requestId = ++cameraDiaRequestId;
+    let frames = cameraFramesPorDia.get(day.data);
+    if (!frames) {
+        const gallery = document.getElementById('camera-detail-gallery');
+        gallery.innerHTML = '<div class="camera-media-empty">Carregando capturas desta data…</div>';
+        try {
+            const response = await fetch(`/api/cameras/${cameraDetalheAtual.camera.id}/frames?data=${encodeURIComponent(day.data)}`);
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.detail || 'Não foi possível carregar as capturas desta data.');
+            frames = result.frames || [];
+            cameraFramesPorDia.set(day.data, frames);
+        } catch (error) {
+            if (requestId === cameraDiaRequestId) gallery.innerHTML = `<div class="camera-media-error">${escaparHtml(error.message)}</div>`;
+            return;
+        }
+    }
+    if (requestId !== cameraDiaRequestId) return;
+    cameraFramesDoDia = frames;
+    cameraFrameAtual = mostrarUltima ? Math.max(frames.length - 1, 0) : 0;
+    renderGaleriaCapturasDia();
+    if (frames.length) renderCapturaDetalhe(cameraFrameAtual);
+    else {
+        document.getElementById('camera-detail-frame').removeAttribute('src');
+        document.getElementById('camera-detail-preview-state').textContent = 'Sem capturas nesta data';
+        document.getElementById('camera-detail-frame-range').disabled = true;
+        document.getElementById('camera-detail-frame-counter').textContent = '0 / 0';
+    }
+}
+
+function renderDetalhesCamera(data) {
+    cameraDetalheAtual = data;
+    cameraFrameAtual = 0;
+    cameraStreamAtivo = false;
+    const camera = data.camera;
+    document.getElementById('camera-detail-title').textContent = camera.nome || `Câmera ${camera.id}`;
+    cameraFramesPorDia = new Map();
+    cameraFramesDoDia = [];
+    document.getElementById('camera-detail-meta').innerHTML = `
+        <div><strong>Status:</strong> ${camera.ativa ? 'Ativa' : 'Inativa'}</div>
+        <div><strong>IP:</strong> ${escaparHtml(camera.ip || 'N/D')}</div>
+        <div><strong>Resolução:</strong> ${escaparHtml(camera.resolucao || 'Não informada')}</div>
+        <div><strong>Qualidade:</strong> ${Number(camera.qualidade_captura || 0)} · intervalo ${Number(camera.intervalo_minutos || 5)} min</div>
+        <div><strong>Capturas:</strong> ${Number(data.capturas.total || 0).toLocaleString('pt-BR')}</div>
+        <div><strong>Primeira:</strong> ${escaparHtml(formatarDataMidia(data.capturas.primeira))}</div>
+        <div><strong>Mais recente:</strong> ${escaparHtml(formatarDataMidia(data.capturas.ultima))}</div>
+    `;
+
+    const disk = data.armazenamento || {};
+    const diskUsed = Number(disk.disco_usado_bytes || 0);
+    const diskTotal = Number(disk.disco_total_bytes || 0);
+    document.getElementById('camera-detail-space-label').textContent = `${formatarBytes(diskUsed)} / ${formatarBytes(diskTotal)} usados no disco · ${formatarBytes(Number(disk.camera_bytes || 0))} desta câmera`;
+    const diskBar = document.getElementById('camera-detail-space-bar');
+    const diskPercent = Math.min(Number(disk.disco_percentual_usado || 0), 100);
+    diskBar.style.width = `${diskPercent}%`;
+    diskBar.textContent = `${diskPercent}%`;
+    diskBar.setAttribute('aria-valuenow', String(diskPercent));
+
+    document.getElementById('camera-detail-capture-count').textContent = Number(data.capturas.total || 0).toLocaleString('pt-BR');
+    const days = data.capturas.dias || [];
+    if (!days.length) {
+        document.getElementById('camera-detail-gallery').innerHTML = '<div class="camera-media-empty">Nenhuma captura encontrada para esta câmera.</div>';
+        document.getElementById('camera-detail-frame').removeAttribute('src');
+        document.getElementById('camera-detail-preview-state').textContent = 'Sem capturas';
+        document.getElementById('camera-detail-day-range').disabled = true;
+        document.getElementById('camera-detail-day-label').textContent = 'Sem datas disponíveis';
+        document.getElementById('camera-detail-first-day').textContent = '—';
+        document.getElementById('camera-detail-last-day').textContent = '—';
+        document.getElementById('camera-detail-frame-range').disabled = true;
+        document.getElementById('camera-detail-frame-counter').textContent = '0 / 0';
+        document.getElementById('camera-detail-prev-frame').disabled = true;
+        document.getElementById('camera-detail-next-frame').disabled = true;
+    } else {
+        const firstDay = days[0].data;
+        const lastDay = days[days.length - 1].data;
+        document.getElementById('camera-detail-first-day').textContent = new Date(`${firstDay}T12:00:00`).toLocaleDateString('pt-BR');
+        document.getElementById('camera-detail-last-day').textContent = new Date(`${lastDay}T12:00:00`).toLocaleDateString('pt-BR');
+        carregarCapturasDia(days.length - 1, true);
+    }
+
+    const frameRange = document.getElementById('camera-detail-frame-range');
+    frameRange.disabled = true;
+    document.getElementById('camera-detail-prev-frame').disabled = true;
+    document.getElementById('camera-detail-next-frame').disabled = true;
+
+    const poster = document.getElementById('camera-detail-live-poster');
+    poster.hidden = false;
+    document.getElementById('camera-detail-live').disabled = !data.capturas.ultima;
+    document.getElementById('camera-detail-preview-state').textContent = data.capturas.ultima
+        ? `ÚLTIMA CAPTURA · ${formatarDataMidia(data.capturas.ultima)}`
+        : 'Nenhuma captura disponível';
+
+    const videoList = document.getElementById('camera-detail-videos');
+    const videos = data.videos || [];
+    document.getElementById('camera-detail-video-count').textContent = String(videos.length);
+    if (!videos.length) {
+        videoList.innerHTML = '<div class="camera-media-empty">Ainda não há vídeos gerados para esta câmera.</div>';
+        document.getElementById('camera-detail-player-wrap').classList.add('d-none');
+        return;
+    }
+    videoList.innerHTML = videos.map((video, index) => `
+        <button type="button" class="camera-video-row" data-camera-video-index="${index}">
+            <span class="camera-video-icon"><i class="fa-solid fa-film"></i></span>
+            <span class="camera-video-info"><strong>${escaparHtml(video.nome)}</strong><small>${escaparHtml(video.formato)} · ${formatarBytes(Number(video.tamanho_bytes || 0))} · ${escaparHtml(formatarDataMidia(video.timestamp))}</small></span>
+            <i class="fa-solid fa-play camera-video-play" aria-hidden="true"></i>
+        </button>
+    `).join('');
+    videoList.dataset.videos = JSON.stringify(videos);
+}
+
+async function abrirDetalhesCamera(cameraId) {
+    const modalElement = document.getElementById('cameraDetailsModal');
+    const modal = bootstrap.Modal.getOrCreateInstance(modalElement);
+    document.getElementById('camera-detail-title').textContent = 'Carregando câmera...';
+    document.getElementById('camera-detail-meta').innerHTML = '<div class="camera-media-empty">Carregando informações e mídias…</div>';
+    document.getElementById('camera-detail-gallery').innerHTML = '';
+    document.getElementById('camera-detail-videos').innerHTML = '';
+    modal.show();
+    try {
+        const response = await fetch(`/api/cameras/${cameraId}/media`);
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.detail || 'Não foi possível carregar as mídias da câmera.');
+        renderDetalhesCamera(result);
+    } catch (error) {
+        document.getElementById('camera-detail-meta').innerHTML = `<div class="camera-media-error">${escaparHtml(error.message || 'Falha ao carregar a câmera.')}</div>`;
+    }
 }
 
 async function carregarUsuarios() {
@@ -672,7 +877,7 @@ async function carregarCameras() {
 
             const card = `
                 <div class="col-md-6 col-xl-4 mb-4">
-                    <div class="card h-100 shadow-sm border-0">
+                    <div class="card camera-summary-card h-100 shadow-sm border-0" data-camera-details-id="${Number(cam.id)}" tabindex="0" aria-label="Abrir detalhes de ${escaparHtml(cam.nome || `Câmera ${cam.id}`)}">
                         <div class="card-body d-flex flex-column">
                             <div class="d-flex justify-content-between align-items-start mb-3">
                                 <div>
@@ -708,6 +913,99 @@ async function carregarCameras() {
             </div>
         `;
     }
+}
+
+function ativarEventosDetalhesCamera() {
+    const cameraList = document.getElementById('lista-cameras');
+    cameraList?.addEventListener('click', (event) => {
+        if (event.target.closest('button, a')) return;
+        const card = event.target.closest('[data-camera-details-id]');
+        if (card) abrirDetalhesCamera(Number(card.dataset.cameraDetailsId));
+    });
+    cameraList?.addEventListener('keydown', (event) => {
+        if (!['Enter', ' '].includes(event.key) || event.target.closest('button, a')) return;
+        const card = event.target.closest('[data-camera-details-id]');
+        if (!card) return;
+        event.preventDefault();
+        abrirDetalhesCamera(Number(card.dataset.cameraDetailsId));
+    });
+
+    document.getElementById('camera-detail-gallery')?.addEventListener('click', (event) => {
+        const button = event.target.closest('[data-camera-frame-index]');
+        if (button) renderCapturaDetalhe(Number(button.dataset.cameraFrameIndex));
+    });
+    document.getElementById('camera-detail-frame-range')?.addEventListener('input', (event) => {
+        renderCapturaDetalhe(Number(event.target.value));
+    });
+    document.getElementById('camera-detail-day-range')?.addEventListener('input', (event) => {
+        const days = cameraDetalheAtual?.capturas?.dias || [];
+        const selectedDay = days[Number(event.target.value)];
+        if (selectedDay) {
+            document.getElementById('camera-detail-day-label').textContent = `${new Date(`${selectedDay.data}T12:00:00`).toLocaleDateString('pt-BR')} · ${Number(selectedDay.total).toLocaleString('pt-BR')} capturas`;
+        }
+    });
+    document.getElementById('camera-detail-day-range')?.addEventListener('change', (event) => {
+        carregarCapturasDia(Number(event.target.value));
+    });
+    document.getElementById('camera-detail-prev-frame')?.addEventListener('click', () => {
+        renderCapturaDetalhe(cameraFrameAtual - 1);
+    });
+    document.getElementById('camera-detail-next-frame')?.addEventListener('click', () => {
+        renderCapturaDetalhe(cameraFrameAtual + 1);
+    });
+    document.getElementById('camera-detail-videos')?.addEventListener('click', (event) => {
+        const button = event.target.closest('[data-camera-video-index]');
+        if (!button) return;
+        const videos = JSON.parse(event.currentTarget.dataset.videos || '[]');
+        const video = videos[Number(button.dataset.cameraVideoIndex)];
+        if (!video) return;
+        const player = document.getElementById('camera-detail-player');
+        const wrap = document.getElementById('camera-detail-player-wrap');
+        player.src = video.url;
+        player.load();
+        wrap.classList.remove('d-none');
+        document.getElementById('camera-detail-playing-title').textContent = video.nome;
+        document.querySelectorAll('[data-camera-video-index]').forEach((item) => {
+            item.classList.toggle('active', item === button);
+        });
+        player.play().catch(() => {});
+    });
+    document.getElementById('camera-detail-live')?.addEventListener('click', (event) => {
+        if (!cameraDetalheAtual) return;
+        const button = event.currentTarget;
+        const preview = document.getElementById('camera-detail-frame');
+        cameraStreamAtivo = !cameraStreamAtivo;
+        if (cameraStreamAtivo) {
+            preview.src = `/api/cameras/${cameraDetalheAtual.camera.id}/stream`;
+            document.getElementById('camera-detail-preview-state').textContent = `AO VIVO · ${formatarDataMidia(Date.now() / 1000)}`;
+            document.getElementById('camera-detail-live-poster').hidden = true;
+            button.innerHTML = '<i class="fa-solid fa-stop"></i><span class="visually-hidden">Parar ao vivo</span>';
+            button.setAttribute('aria-label', 'Parar ao vivo');
+        } else {
+            document.getElementById('camera-detail-preview-state').textContent = `ÚLTIMA CAPTURA · ${formatarDataMidia(cameraFramesDoDia[cameraFrameAtual]?.timestamp)}`;
+            document.getElementById('camera-detail-live-poster').hidden = false;
+            button.innerHTML = '<i class="fa-solid fa-play"></i><span class="visually-hidden">Iniciar ao vivo</span>';
+            button.setAttribute('aria-label', 'Iniciar ao vivo');
+            renderCapturaDetalhe(cameraFrameAtual);
+        }
+    });
+    document.getElementById('cameraDetailsModal')?.addEventListener('hidden.bs.modal', () => {
+        const preview = document.getElementById('camera-detail-frame');
+        preview?.removeAttribute('src');
+        cameraStreamAtivo = false;
+        const liveButton = document.getElementById('camera-detail-live');
+        if (liveButton) {
+            liveButton.innerHTML = '<i class="fa-solid fa-play"></i><span class="visually-hidden">Iniciar ao vivo</span>';
+            liveButton.setAttribute('aria-label', 'Iniciar ao vivo');
+        }
+        document.getElementById('camera-detail-live-poster').hidden = false;
+        const player = document.getElementById('camera-detail-player');
+        if (player) {
+            player.pause();
+            player.removeAttribute('src');
+            player.load();
+        }
+    });
 }
 
 function abrirPreview(cameraId) {
@@ -1100,6 +1398,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     const isAdmin = document.body.dataset.admin === 'true';
+    if (isAdmin) ativarEventosDetalhesCamera();
     if (isAdmin) {
         carregarStatusDisco();
         await Promise.all([
