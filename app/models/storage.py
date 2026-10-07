@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, Boolean, Float, ForeignKey, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Boolean, Float, ForeignKey, UniqueConstraint, DateTime
+from datetime import datetime
 from app.core.database import Base
 
 class StorageConfig(Base):
@@ -28,6 +29,16 @@ class StorageConfig(Base):
     backup_last_success_at = Column(Integer, default=0)
     backup_error = Column(String, default="")
     backup_alert_sent_at = Column(Integer, default=0)
+
+
+class LocalStorageLocation(Base):
+    __tablename__ = "local_storage_locations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    nome = Column(String, nullable=False)
+    caminho = Column(String, nullable=False, unique=True)
+    ativo = Column(Boolean, nullable=False, default=True)
+    criada_em = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
 class StorageBackupFile(Base):

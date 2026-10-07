@@ -4,23 +4,22 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 from app.core.paths import FFMPEG_BINARY, SYSTEM_TEMP_DIR, TEMP_DIR
+from app.services.local_storage import escolher_local_de_captura, listar_raizes_ativas
 
 ROOT_TEMP = str(TEMP_DIR)
 
 def obter_info_frames(camera_id: int):
     todas_imagens = []
-    pasta_camera = os.path.join(ROOT_TEMP, "Capturas", f"camera_{camera_id}")
-    
-    if not os.path.exists(pasta_camera):
-        return {"total": 0, "primeiro": None, "ultimo": None}
-        
-    # Vasculha apenas as pastas de dias dentro desta câmara específica
-    for dia_dir in os.listdir(pasta_camera):
-        caminho_dia = os.path.join(pasta_camera, dia_dir)
-        if os.path.isdir(caminho_dia):
-            for img in os.listdir(caminho_dia):
-                if img.endswith(".jpg"):
-                    todas_imagens.append(img)
+    seen_paths = set()
+    for storage_root in listar_raizes_ativas():
+        camera_root = storage_root / "Capturas" / f"camera_{camera_id}"
+        if not camera_root.is_dir():
+            continue
+        for image in camera_root.rglob("frame_*.jpg"):
+            resolved = image.resolve()
+            if image.is_file() and resolved not in seen_paths:
+                seen_paths.add(resolved)
+                todas_imagens.append(image.name)
                     
     if not todas_imagens:
         return {"total": 0, "primeiro": None, "ultimo": None}
@@ -37,15 +36,16 @@ def gerar_timelapse(camera_id: int, data_inicio: str, data_fim: str, fps: int = 
     dt_fim = datetime.strptime(data_fim, "%Y-%m-%dT%H:%M")
 
     todas_imagens_paths = list(caminhos_frames or [])
-    pasta_camera = os.path.join(ROOT_TEMP, "Capturas", f"camera_{camera_id}")
-    
-    if caminhos_frames is None and os.path.exists(pasta_camera):
-        for dia_dir in os.listdir(pasta_camera):
-            caminho_dia = os.path.join(pasta_camera, dia_dir)
-            if os.path.isdir(caminho_dia):
-                for img in os.listdir(caminho_dia):
-                    if img.endswith(".jpg"):
-                        todas_imagens_paths.append(os.path.join(caminho_dia, img))
+    if caminhos_frames is None:
+        seen_paths = set()
+        for storage_root in listar_raizes_ativas():
+            camera_root = storage_root / "Capturas" / f"camera_{camera_id}"
+            if camera_root.is_dir():
+                for path in camera_root.rglob("frame_*.jpg"):
+                    resolved = path.resolve()
+                    if path.is_file() and resolved not in seen_paths:
+                        seen_paths.add(resolved)
+                        todas_imagens_paths.append(str(path))
 
     imagens_filtradas = []
     for caminho_img in todas_imagens_paths:
@@ -67,7 +67,10 @@ def gerar_timelapse(camera_id: int, data_inicio: str, data_fim: str, fps: int = 
 
     # Destino: /var/temp/Videos/camera_X/DDMMYYYY
     hoje_dir = datetime.now().strftime("%d%m%Y")
-    pasta_destino = os.path.join(ROOT_TEMP, "Videos", f"camera_{camera_id}", hoje_dir)
+    video_storage_root = escolher_local_de_captura()
+    if video_storage_root is None:
+        return {"sucesso": False, "erro": "Todos os discos locais configurados estão com menos de 5% de espaço livre."}
+    pasta_destino = os.path.join(str(video_storage_root), "Videos", f"camera_{camera_id}", hoje_dir)
     os.makedirs(pasta_destino, exist_ok=True)
 
     nome_video = f"timelapse_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{formato}"

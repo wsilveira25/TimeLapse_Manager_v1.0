@@ -23,6 +23,7 @@ from smbprotocol.open import (
 from smbprotocol.session import Session
 from smbprotocol.tree import TreeConnect
 from app.core.paths import TEMP_DIR
+from app.services.local_storage import listar_raizes_ativas
 # Pastas locais que vamos monitorizar
 PASTA_TIMELAPSES = str(TEMP_DIR / "timelapses")
 PASTA_SINCRONIZADOS = str(TEMP_DIR / "Sincronizados")
@@ -239,26 +240,37 @@ def iniciar_sincronizacao_pendentes(config_ativa):
     if not configuracoes:
         return {"sucesso": False, "enviados": [], "erros": [{"storage": "Nenhum destino ativo."}]}
 
-    if not os.path.exists(PASTA_VIDEOS):
+    video_roots = [root / "Videos" for root in listar_raizes_ativas()]
+    if not any(path.is_dir() for path in video_roots):
         return {"sucesso": True, "enviados": [], "erros": [], "destinos": [c.tipo for c in configuracoes]}
 
-    for root_dir, _, files in os.walk(PASTA_VIDEOS):
-        for file in files:
-            if file.endswith(('.mp4', '.mkv', '.avi')):
-                caminho_completo = os.path.join(root_dir, file)
+    seen_files = set()
+    for videos_root in video_roots:
+        quarantine_root = videos_root.parent / "Sincronizados"
+        if not videos_root.is_dir():
+            continue
+        for root_dir, _, files in os.walk(videos_root):
+            for file in files:
+                if not file.endswith(('.mp4', '.mkv', '.avi')):
+                    continue
+                caminho_completo = Path(root_dir) / file
+                resolved_path = caminho_completo.resolve()
+                if resolved_path in seen_files:
+                    continue
+                seen_files.add(resolved_path)
                 erros_arquivo = []
 
                 for config in configuracoes:
                     tipo = config.tipo.lower()
                     try:
                         if tipo == 'webdav':
-                            resultado = upload_webdav_nextcloud(caminho_completo, config)
+                            resultado = upload_webdav_nextcloud(str(caminho_completo), config)
                         elif tipo == 'ftp':
-                            resultado = upload_ftp_truenas(caminho_completo, config)
+                            resultado = upload_ftp_truenas(str(caminho_completo), config)
                         elif tipo == 'smb':
-                            resultado = upload_smb_truenas(caminho_completo, config)
+                            resultado = upload_smb_truenas(str(caminho_completo), config)
                         elif tipo in {'google_drive', 'onedrive'}:
-                            metadata = upload_cloud_file(caminho_completo, config)
+                            metadata = upload_cloud_file(str(caminho_completo), config)
                             resultado = {
                                 "sucesso": int(metadata.get("size", -1)) == os.path.getsize(caminho_completo),
                                 "erro": "Tamanho divergente após upload cloud.",
@@ -275,11 +287,11 @@ def iniciar_sincronizacao_pendentes(config_ativa):
                     erros.append({file: erros_arquivo})
                     continue
 
-                caminho_relativo = os.path.relpath(caminho_completo, PASTA_VIDEOS)
-                caminho_quarentena = os.path.join(PASTA_SINCRONIZADOS, caminho_relativo)
-                os.makedirs(os.path.dirname(caminho_quarentena), exist_ok=True)
+                caminho_relativo = caminho_completo.relative_to(videos_root)
+                caminho_quarentena = quarantine_root / caminho_relativo
+                caminho_quarentena.parent.mkdir(parents=True, exist_ok=True)
                 try:
-                    shutil.move(caminho_completo, caminho_quarentena)
+                    shutil.move(str(caminho_completo), str(caminho_quarentena))
                     arquivos_sincronizados.append(file)
                 except Exception as exc:
                     erros.append({file: [f"upload confirmado, mas falhou mover para quarentena: {exc}"]})
@@ -302,18 +314,19 @@ def iniciar_sincronizacao_pendentes(config_ativa):
 
 
 def limpar_quarentena_48h():
-    if not os.path.exists(PASTA_SINCRONIZADOS):
-        return
-
     agora = time.time()
     limite_tempo = 48 * 3600
 
-    for root_dir, _, files in os.walk(PASTA_SINCRONIZADOS):
-        for arquivo in files:
-            caminho = os.path.join(root_dir, arquivo)
-            idade = agora - os.path.getmtime(caminho)
-            if idade > limite_tempo:
-                try:
-                    os.remove(caminho)
-                except Exception:
-                    pass
+    for storage_root in listar_raizes_ativas():
+        quarantine_root = storage_root / "Sincronizados"
+        if not quarantine_root.is_dir():
+            continue
+        for root_dir, _, files in os.walk(quarantine_root):
+            for arquivo in files:
+                caminho = os.path.join(root_dir, arquivo)
+                idade = agora - os.path.getmtime(caminho)
+                if idade > limite_tempo:
+                    try:
+                        os.remove(caminho)
+                    except Exception:
+                        pass

@@ -5,18 +5,17 @@ import secrets
 import sys
 import threading
 import time
-import shutil
+from pathlib import Path
 from typing import Literal
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from fastapi.responses import RedirectResponse
 from app.core.auth import require_admin
 from app.core.database import SessionLocal, get_db
-from app.core.paths import TEMP_DIR
-from app.models.storage import StorageBackupFile, StorageConfig, SystemSettings
+from app.models.storage import LocalStorageLocation, StorageBackupFile, StorageConfig, SystemSettings
 from app.services.cloud_storage import (
     build_authorization_url,
     exchange_authorization_code,
@@ -31,13 +30,17 @@ from app.services.alert_service import (
     enviar_email_configurado,
     resumo_config_smtp,
 )
+from app.services.local_storage import (
+    DEFAULT_LOCATION_ID,
+    listar_locais_armazenamento,
+    somar_uso_locais_armazenamento,
+)
 from app.tasks.scheduler import scheduler as app_scheduler, executar_reinicio_processo
 
 router = APIRouter(prefix="/api/system", tags=["Sistema"])
 logger = logging.getLogger(__name__)
 
 #PASTA_POOL_BASE = "/var/temp/Capturas"
-PASTA_CAPTURAS = str(TEMP_DIR / "Capturas")
 TAMANHO_PADRAO_FALLBACK = 450 * 1024  # 450 KB de segurança caso ainda não haja fotos
 
 
@@ -85,21 +88,33 @@ def resumir_erro_backup(erro: str) -> str:
 def contar_frames_no_backup(db: Session, storage_config_id: int) -> int:
     return db.query(func.count(StorageBackupFile.id)).filter(
         StorageBackupFile.storage_config_id == storage_config_id,
-        StorageBackupFile.local_path.like("Capturas/%"),
+        or_(
+            StorageBackupFile.local_path.like("Capturas/%"),
+            StorageBackupFile.local_path.like("local-%/Capturas/%"),
+        ),
         StorageBackupFile.backed_up_at > 0,
         StorageBackupFile.last_error == "",
     ).scalar() or 0
 
 
 def _calcular_status_armazenamento(db: Session):
-    os.makedirs(PASTA_CAPTURAS, exist_ok=True)
-    total, used, free = shutil.disk_usage(TEMP_DIR)
+    total, used, free = somar_uso_locais_armazenamento(db)
 
     arquivos_jpg = []
-    for root, dirs, files in os.walk(PASTA_CAPTURAS):
-        for f in files:
-            if f.endswith('.jpg'):
-                arquivos_jpg.append(os.path.join(root, f))
+    seen_captures = set()
+    for location in sorted(listar_locais_armazenamento(db), key=lambda item: len(item["caminho"]), reverse=True):
+        if not location["padrao"] and not os.path.ismount(location["caminho"]):
+            continue
+        captures_root = Path(location["caminho"]) / "Capturas"
+        for root, dirs, files in os.walk(captures_root):
+            for filename in files:
+                if filename.endswith('.jpg'):
+                    path = Path(root) / filename
+                    resolved_path = path.resolve()
+                    if resolved_path in seen_captures:
+                        continue
+                    seen_captures.add(resolved_path)
+                    arquivos_jpg.append(str(path))
 
     capturas_realizadas = len(arquivos_jpg)
     tamanho_medio = TAMANHO_PADRAO_FALLBACK
@@ -218,7 +233,7 @@ def _atualizar_cache_status_armazenamento():
 
 
 def _montar_status_rapido_armazenamento(db: Session):
-    total, used, free = shutil.disk_usage(TEMP_DIR)
+    total, used, free = somar_uso_locais_armazenamento(db)
     local_summary = build_provider_summary(
         nome="Armazenamento Local",
         total_bytes=total,
@@ -337,6 +352,92 @@ class StorageConfigRequest(BaseModel):
     ativo: bool = False
     oauth_client_id: str = ""
     oauth_client_secret: str = ""
+
+
+class LocalStorageLocationRequest(BaseModel):
+    id: int | None = None
+    nome: str
+    caminho: str
+    ativo: bool = True
+
+
+@router.get("/storage/local-locations", dependencies=[Depends(require_admin)])
+def listar_destinos_locais(db: Session = Depends(get_db)):
+    locations = []
+    for location in listar_locais_armazenamento(db):
+        path = Path(location["caminho"])
+        mounted = location["padrao"] or os.path.ismount(path)
+        try:
+            if not mounted:
+                raise OSError("Disco não montado.")
+            usage = os.statvfs(path)
+            total = usage.f_blocks * usage.f_frsize
+            free = usage.f_bavail * usage.f_frsize
+            error = ""
+        except OSError as exc:
+            total = 0
+            free = 0
+            error = str(exc)[:240]
+        locations.append({
+            **location,
+            "montado": mounted,
+            "total_bytes": total,
+            "livre_bytes": free,
+            "erro": error,
+        })
+    return locations
+
+
+@router.post("/storage/local-locations", dependencies=[Depends(require_admin)])
+def salvar_destino_local(dados: LocalStorageLocationRequest, db: Session = Depends(get_db)):
+    nome = dados.nome.strip()
+    raw_path = Path(dados.caminho).expanduser()
+    if not nome or not raw_path.is_absolute():
+        raise HTTPException(status_code=422, detail="Informe um nome e um caminho absoluto do servidor.")
+    path = raw_path.resolve()
+    if not path.is_dir() or not os.path.ismount(path):
+        raise HTTPException(status_code=422, detail="O caminho precisa ser um ponto de montagem ativo.")
+    try:
+        default_path = Path(listar_locais_armazenamento(db)[0]["caminho"]).resolve()
+        path.relative_to(default_path)
+        if path == default_path:
+            raise HTTPException(status_code=422, detail="O destino principal já é gerenciado automaticamente.")
+        default_device = default_path.stat().st_dev
+        if path.stat().st_dev == default_device:
+            raise HTTPException(status_code=422, detail="O ponto de montagem precisa usar outro disco e ficar dentro do diretório principal.")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Monte o disco em uma pasta dentro de {default_path}.") from exc
+    except OSError as exc:
+        raise HTTPException(status_code=422, detail="Não foi possível acessar o ponto de montagem.") from exc
+    if not os.access(path, os.R_OK | os.W_OK | os.X_OK):
+        raise HTTPException(status_code=422, detail="O usuário do serviço não tem leitura e escrita nesse disco.")
+
+    duplicate = db.query(LocalStorageLocation).filter(LocalStorageLocation.caminho == str(path)).first()
+    location = db.query(LocalStorageLocation).filter(LocalStorageLocation.id == dados.id).first() if dados.id else duplicate
+    if duplicate and location and duplicate.id != location.id:
+        raise HTTPException(status_code=409, detail="Esse ponto de montagem já está cadastrado.")
+    if location is None:
+        location = LocalStorageLocation(nome=nome, caminho=str(path), ativo=dados.ativo)
+        db.add(location)
+    else:
+        location.nome = nome
+        location.caminho = str(path)
+        location.ativo = dados.ativo
+    db.commit()
+    db.refresh(location)
+    return {"id": location.id, "nome": location.nome, "caminho": location.caminho, "ativo": location.ativo}
+
+
+@router.delete("/storage/local-locations/{location_id}", dependencies=[Depends(require_admin)])
+def excluir_destino_local(location_id: int, db: Session = Depends(get_db)):
+    if location_id == DEFAULT_LOCATION_ID:
+        raise HTTPException(status_code=400, detail="O destino principal não pode ser removido.")
+    location = db.query(LocalStorageLocation).filter(LocalStorageLocation.id == location_id).first()
+    if not location:
+        raise HTTPException(status_code=404, detail="Destino local não encontrado.")
+    db.delete(location)
+    db.commit()
+    return {"sucesso": True, "mensagem": "Destino removido da lista; os arquivos no disco foram preservados."}
 
 
 class AlertSettingsRequest(BaseModel):

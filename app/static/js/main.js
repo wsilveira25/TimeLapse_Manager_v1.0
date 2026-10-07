@@ -130,6 +130,82 @@ function renderSettingsStorage(providers) {
     `).join('');
 }
 
+function limparFormularioArmazenamentoLocal() {
+    document.getElementById('local-storage-form')?.reset();
+    document.getElementById('local-storage-id').value = '';
+    document.getElementById('local-storage-active').value = 'true';
+    document.getElementById('local-storage-submit').innerHTML = '<i class="fa-solid fa-plus me-2"></i>Adicionar disco';
+    document.getElementById('local-storage-cancel').classList.add('d-none');
+}
+
+function renderLocaisArmazenamento(locations) {
+    const container = document.getElementById('local-storage-list');
+    if (!container) return;
+    container.innerHTML = locations.map((location) => {
+        const total = Number(location.total_bytes || 0);
+        const free = Number(location.livre_bytes || 0);
+        const percentUsed = total ? Math.min(Math.max(((total - free) / total) * 100, 0), 100) : 0;
+        const status = location.padrao ? 'Principal' : location.ativo ? 'Ativo' : 'Pausado';
+        const error = location.erro ? `<div class="camera-media-error mt-2">${escaparHtml(location.erro)}</div>` : '';
+        return `
+            <article class="local-storage-row" data-local-storage-id="${Number(location.id)}">
+                <div class="local-storage-heading">
+                    <div class="min-w-0"><strong>${escaparHtml(location.nome)}</strong><div class="settings-list-meta">${escaparHtml(location.caminho)}</div></div>
+                    <span class="local-storage-state ${location.ativo ? 'active' : 'paused'}">${escaparHtml(status)}${!location.montado ? ' · Não montado' : ''}</span>
+                </div>
+                <div class="progress local-storage-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percentUsed.toFixed(1)}">
+                    <div class="progress-bar" style="width:${percentUsed}%">${percentUsed.toFixed(1)}%</div>
+                </div>
+                <div class="local-storage-capacity"><span>${formatarBytes(total - free)} usados de ${formatarBytes(total)}</span><strong>${formatarBytes(free)} livres</strong></div>
+                ${error}
+                <div class="local-storage-actions">
+                    ${location.padrao ? '<small>O destino principal não pode ser removido.</small>' : `
+                        <button type="button" class="btn btn-sm btn-outline-light" data-local-storage-edit="${Number(location.id)}" ${!location.montado ? 'disabled' : ''}><i class="fa-solid fa-pen me-1"></i>Editar</button>
+                        <select class="form-select form-select-sm" data-local-storage-active="${Number(location.id)}" aria-label="Estado do disco ${escaparHtml(location.nome)}" ${!location.montado ? 'disabled' : ''}>
+                            <option value="true" ${location.ativo ? 'selected' : ''}>Ativo</option>
+                            <option value="false" ${!location.ativo ? 'selected' : ''}>Pausado</option>
+                        </select>
+                        <button type="button" class="btn btn-sm btn-outline-danger" data-local-storage-delete="${Number(location.id)}"><i class="fa-solid fa-trash me-1"></i>Remover</button>`}
+                </div>
+            </article>
+        `;
+    }).join('') || '<div class="settings-empty-state">Nenhum disco local disponível.</div>';
+}
+
+async function carregarLocaisArmazenamento() {
+    const container = document.getElementById('local-storage-list');
+    if (!container) return;
+    container.innerHTML = '<div class="settings-empty-state">Verificando discos montados…</div>';
+    try {
+        const response = await fetch('/api/system/storage/local-locations');
+        const result = await response.json().catch(() => []);
+        if (!response.ok) throw new Error(result.detail || 'Não foi possível listar os discos locais.');
+        renderLocaisArmazenamento(result);
+    } catch (error) {
+        container.innerHTML = `<div class="camera-media-error">${escaparHtml(error.message)}</div>`;
+    }
+}
+
+async function salvarDestinoLocal(payload) {
+    const feedback = document.getElementById('local-storage-feedback');
+    try {
+        const response = await fetch('/api/system/storage/local-locations', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.detail || 'Não foi possível salvar o disco.');
+        feedback.className = 'small text-success';
+        feedback.textContent = payload.id ? 'Destino atualizado.' : 'Disco adicionado ao pool de capturas.';
+        limparFormularioArmazenamentoLocal();
+        await carregarLocaisArmazenamento();
+    } catch (error) {
+        feedback.className = 'small text-danger';
+        feedback.textContent = error.message || 'Falha ao salvar destino local.';
+    }
+}
+
 function renderSettingsUsers(users) {
     const container = document.getElementById('settings-users-list');
     if (!container) return;
@@ -1175,6 +1251,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         if (feedback) feedback.textContent = error.message;
                     });
                 }
+                if (viewButton.dataset.settingsView === 'storage') carregarLocaisArmazenamento();
                 return;
             }
 
@@ -1270,6 +1347,65 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     document.getElementById('alert-settings-form')?.addEventListener('submit', salvarConfigAlertas);
     document.getElementById('alerts-test-email')?.addEventListener('click', testarConfigAlertas);
+    document.getElementById('local-storage-form')?.addEventListener('submit', (event) => {
+        event.preventDefault();
+        salvarDestinoLocal({
+            id: Number(document.getElementById('local-storage-id').value) || null,
+            nome: document.getElementById('local-storage-name').value.trim(),
+            caminho: document.getElementById('local-storage-path').value.trim(),
+            ativo: document.getElementById('local-storage-active').value === 'true',
+        });
+    });
+    document.getElementById('local-storage-cancel')?.addEventListener('click', limparFormularioArmazenamentoLocal);
+    document.getElementById('local-storage-list')?.addEventListener('change', async (event) => {
+        const select = event.target.closest('[data-local-storage-active]');
+        if (!select) return;
+        const feedback = document.getElementById('local-storage-feedback');
+        try {
+            const response = await fetch('/api/system/storage/local-locations');
+            const locations = await response.json().catch(() => []);
+            if (!response.ok) throw new Error('Não foi possível consultar os discos locais.');
+            const location = locations.find((item) => item.id === Number(select.dataset.localStorageActive));
+            if (!location) throw new Error('Disco local não encontrado.');
+            await salvarDestinoLocal({ ...location, ativo: select.value === 'true' });
+        } catch (error) {
+            feedback.className = 'small text-danger';
+            feedback.textContent = error.message || 'Falha ao alterar o estado do disco.';
+            await carregarLocaisArmazenamento();
+        }
+    });
+    document.getElementById('local-storage-list')?.addEventListener('click', async (event) => {
+        const editButton = event.target.closest('[data-local-storage-edit]');
+        if (editButton) {
+            const response = await fetch('/api/system/storage/local-locations');
+            const locations = await response.json().catch(() => []);
+            const location = locations.find((item) => item.id === Number(editButton.dataset.localStorageEdit));
+            if (!location) return;
+            document.getElementById('local-storage-id').value = location.id;
+            document.getElementById('local-storage-name').value = location.nome;
+            document.getElementById('local-storage-path').value = location.caminho;
+            document.getElementById('local-storage-active').value = String(location.ativo);
+            document.getElementById('local-storage-submit').innerHTML = '<i class="fa-solid fa-floppy-disk me-2"></i>Salvar disco';
+            document.getElementById('local-storage-cancel').classList.remove('d-none');
+            document.getElementById('local-storage-name').focus();
+            return;
+        }
+        const deleteButton = event.target.closest('[data-local-storage-delete]');
+        if (!deleteButton) return;
+        if (!window.confirm('Remover este ponto de montagem da lista? Os arquivos continuarão no disco, mas ele deixará de receber capturas e backups.')) return;
+        const feedback = document.getElementById('local-storage-feedback');
+        try {
+            const response = await fetch(`/api/system/storage/local-locations/${Number(deleteButton.dataset.localStorageDelete)}`, { method: 'DELETE' });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.detail || 'Não foi possível remover o disco.');
+            feedback.className = 'small text-success';
+            feedback.textContent = result.mensagem;
+            await carregarLocaisArmazenamento();
+        } catch (error) {
+            feedback.className = 'small text-danger';
+            feedback.textContent = error.message || 'Falha ao remover destino local.';
+        }
+    });
 
     carregarConfigAlertas().catch((error) => {
         console.error('Erro ao carregar configuração SMTP:', error);

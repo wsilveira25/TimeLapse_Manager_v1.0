@@ -13,13 +13,14 @@ from sqlalchemy.orm import sessionmaker
 from app.core.database import Base
 from app.core.auth import hash_password, require_auth, seed_initial_admin, verify_login, verify_password
 from app.models.camera import Camera
-from app.models.storage import StorageBackupFile, StorageConfig, SystemSettings
+from app.models.storage import LocalStorageLocation, StorageBackupFile, StorageConfig, SystemSettings
 from app.models.user import SystemUser
 from app.routers import system as system_router
+from app.routers.system import LocalStorageLocationRequest
 from app.routers import users as users_router
 from app.routers import cameras as cameras_router
 from app.routers.system import build_provider_summary, resumir_erro_backup
-from app.services import alert_service, backup_service, capture_service, cloud_storage
+from app.services import alert_service, backup_service, capture_service, cloud_storage, local_storage
 from app.services.cloud_storage import (
     _google_error_message,
     _google_folder_for_remote_path,
@@ -328,7 +329,7 @@ class StorageProviderSummaryTests(unittest.TestCase):
                 patch.object(system_router, '_STORAGE_STATUS_CACHE', None),
                 patch.object(system_router, '_STORAGE_STATUS_UPDATED_AT', 0.0),
                 patch.object(system_router, '_STORAGE_STATUS_REFRESHING', False),
-                patch('app.routers.system.shutil.disk_usage', return_value=(1000, 400, 600)),
+                patch('app.routers.system.somar_uso_locais_armazenamento', return_value=(1000, 400, 600)),
                 patch('app.routers.system._calcular_status_armazenamento') as calculate,
                 patch('app.routers.system.threading.Thread') as thread,
             ):
@@ -361,11 +362,15 @@ class StorageProviderSummaryTests(unittest.TestCase):
             video_path = video_dir / 'timelapse_20261001_120000.mp4'
             video_path.write_bytes(b'test-video')
 
-            with patch.object(cameras_router, 'TEMP_DIR', Path(root)):
+            with (
+                patch.object(cameras_router, 'TEMP_DIR', Path(root)),
+                patch('app.services.local_storage.TEMP_DIR', Path(root)),
+            ):
                 media = cameras_router.listar_midias_camera(camera.id, db)
                 daily_frames = cameras_router.listar_capturas_data(camera.id, date(2026, 10, 1), db)
                 video_response = cameras_router.servir_video_camera(
                     camera.id,
+                    0,
                     '01102026/timelapse_20261001_120000.mp4',
                     db,
                 )
@@ -373,7 +378,9 @@ class StorageProviderSummaryTests(unittest.TestCase):
                     cameras_router._camera_media_path(
                         camera.id,
                         'Capturas',
+                        0,
                         '../camera_999/frame_20261001_100000.jpg',
+                        db,
                     )
 
         engine.dispose()
@@ -523,15 +530,234 @@ class StorageProviderSummaryTests(unittest.TestCase):
         )
 
     def test_capture_is_skipped_when_disk_has_five_percent_free(self):
-        usage = SimpleNamespace(total=1000, used=960, free=40)
         with (
-            patch('app.services.capture_service.shutil.disk_usage', return_value=usage),
+            patch('app.services.capture_service.escolher_local_de_captura', return_value=None),
             patch('app.services.capture_service.subprocess.run') as ffmpeg,
         ):
             captured = capture_service.capturar_frame_camera(99, 'rtsp://camera/stream', 2)
 
         self.assertIsNone(captured)
         ffmpeg.assert_not_called()
+
+    def test_capture_storage_selects_active_disk_with_most_free_space(self):
+        engine = create_engine('sqlite:///:memory:')
+        Base.metadata.create_all(engine)
+        TestSession = sessionmaker(bind=engine)
+        with tempfile.TemporaryDirectory() as root, TestSession() as db:
+            primary = Path(root)
+            secondary = primary / 'disk-2'
+            secondary.mkdir()
+            db.add(LocalStorageLocation(nome='Disco 2', caminho=str(secondary), ativo=True))
+            db.commit()
+
+            def fake_mount(path):
+                return Path(path).resolve() == secondary.resolve()
+
+            def fake_usage(path):
+                if Path(path).resolve() == secondary.resolve():
+                    return SimpleNamespace(total=1000, used=100, free=900)
+                return SimpleNamespace(total=1000, used=600, free=400)
+
+            with (
+                patch.object(local_storage, 'TEMP_DIR', primary),
+                patch.object(local_storage, 'SessionLocal', TestSession),
+                patch('app.services.local_storage.os.path.ismount', side_effect=fake_mount),
+                patch('app.services.local_storage.shutil.disk_usage', side_effect=fake_usage),
+            ):
+                destination = local_storage.escolher_local_de_captura()
+
+        engine.dispose()
+        self.assertEqual(destination, secondary)
+
+    def test_local_cleanup_waits_until_every_active_disk_is_low(self):
+        engine = create_engine('sqlite:///:memory:')
+        Base.metadata.create_all(engine)
+        TestSession = sessionmaker(bind=engine)
+        now = 2_000_000_000
+        with tempfile.TemporaryDirectory() as root, TestSession() as db:
+            primary = Path(root)
+            secondary = primary / 'disk-2'
+            capture_dir = primary / 'Capturas' / 'camera_1'
+            capture_dir.mkdir(parents=True)
+            secondary.mkdir()
+            old_capture = capture_dir / 'frame_old.jpg'
+            old_capture.write_bytes(b'frame')
+            old_mtime = now - 31 * 86400
+            os.utime(old_capture, (old_mtime, old_mtime))
+            destination = StorageConfig(tipo='smb', ativo=True, host='192.0.2.20', caminho_remoto='captures')
+            db.add_all([
+                destination,
+                LocalStorageLocation(nome='Disco 2', caminho=str(secondary), ativo=True),
+            ])
+            db.flush()
+            stat = old_capture.stat()
+            db.add(StorageBackupFile(
+                storage_config_id=destination.id,
+                local_path='Capturas/camera_1/frame_old.jpg',
+                remote_path='backup/frame_old.jpg',
+                remote_id='verified-frame',
+                file_size=stat.st_size,
+                file_mtime_ns=stat.st_mtime_ns,
+                backed_up_at=now - 30 * 86400,
+                last_error='',
+            ))
+            db.commit()
+
+            def fake_mount(path):
+                return Path(path).resolve() == secondary.resolve()
+
+            def fake_usage(path):
+                if Path(path).resolve() == secondary.resolve():
+                    return SimpleNamespace(total=1000, used=500, free=500)
+                return SimpleNamespace(total=1000, used=960, free=40)
+
+            original_path_stat = Path.stat
+
+            def fake_path_stat(path, *args, **kwargs):
+                result = original_path_stat(path, *args, **kwargs)
+                if Path(path) == secondary:
+                    return SimpleNamespace(st_dev=result.st_dev + 1)
+                return result
+
+            verifier = Mock(return_value=True)
+            with (
+                patch.object(local_storage, 'TEMP_DIR', primary),
+                patch.object(backup_service, 'ROOT_TEMP', primary),
+                patch('app.services.local_storage.os.path.ismount', side_effect=fake_mount),
+                patch('app.services.backup_service.shutil.disk_usage', side_effect=fake_usage),
+                patch('pathlib.Path.stat', new=fake_path_stat),
+            ):
+                result = backup_service.limpar_capturas_backupeadas(
+                    db,
+                    root=primary,
+                    min_free_ratio=0.20,
+                    now=now,
+                    disk_usage=fake_usage,
+                    verifier=verifier,
+                )
+
+            file_still_exists = old_capture.exists()
+
+        engine.dispose()
+        verifier.assert_not_called()
+        self.assertTrue(file_still_exists)
+        self.assertEqual(result['arquivos_removidos'], 0)
+        self.assertFalse(result['precisa_limpeza'])
+
+    def test_local_cleanup_removes_verified_old_file_after_all_disks_are_low(self):
+        engine = create_engine('sqlite:///:memory:')
+        Base.metadata.create_all(engine)
+        TestSession = sessionmaker(bind=engine)
+        now = 2_000_000_000
+        with tempfile.TemporaryDirectory() as root, TestSession() as db:
+            primary = Path(root)
+            secondary = primary / 'disk-2'
+            capture_dir = secondary / 'Capturas' / 'camera_1'
+            capture_dir.mkdir(parents=True)
+            old_capture = capture_dir / 'frame_old.jpg'
+            old_capture.write_bytes(b'verified frame')
+            old_mtime = now - 31 * 86400
+            os.utime(old_capture, (old_mtime, old_mtime))
+            destination = StorageConfig(tipo='smb', ativo=True, host='192.0.2.20', caminho_remoto='captures')
+            db.add_all([
+                destination,
+                LocalStorageLocation(nome='Disco 2', caminho=str(secondary), ativo=True),
+            ])
+            db.flush()
+            stat = old_capture.stat()
+            db.add(StorageBackupFile(
+                storage_config_id=destination.id,
+                local_path='local-1/Capturas/camera_1/frame_old.jpg',
+                remote_path='backup/local-1/Capturas/camera_1/frame_old.jpg',
+                remote_id='verified-frame',
+                file_size=stat.st_size,
+                file_mtime_ns=stat.st_mtime_ns,
+                backed_up_at=now - 30 * 86400,
+                last_error='',
+            ))
+            db.commit()
+
+            def fake_mount(path):
+                return Path(path).resolve() == secondary.resolve()
+
+            def fake_usage(path):
+                if Path(path).resolve() == secondary.resolve():
+                    return SimpleNamespace(total=1000, used=970 if old_capture.exists() else 750, free=30 if old_capture.exists() else 250)
+                return SimpleNamespace(total=1000, used=970, free=30)
+
+            original_path_stat = Path.stat
+
+            def fake_path_stat(path, *args, **kwargs):
+                result = original_path_stat(path, *args, **kwargs)
+                if Path(path) == secondary:
+                    return SimpleNamespace(st_dev=result.st_dev + 1)
+                return result
+
+            verifier = Mock(return_value=True)
+            with (
+                patch.object(local_storage, 'TEMP_DIR', primary),
+                patch.object(backup_service, 'ROOT_TEMP', primary),
+                patch('app.services.local_storage.os.path.ismount', side_effect=fake_mount),
+                patch('app.services.backup_service.shutil.disk_usage', side_effect=fake_usage),
+                patch('pathlib.Path.stat', new=fake_path_stat),
+            ):
+                result = backup_service.limpar_capturas_backupeadas(
+                    db,
+                    root=primary,
+                    min_free_ratio=0.20,
+                    min_age_seconds=0,
+                    now=now,
+                    disk_usage=fake_usage,
+                    verifier=verifier,
+                )
+                removed = not old_capture.exists()
+
+        engine.dispose()
+        verifier.assert_called_once()
+        self.assertTrue(removed)
+        self.assertEqual(result['arquivos_removidos'], 1)
+
+    def test_local_storage_api_registers_mount_and_remove_keeps_files(self):
+        engine = create_engine('sqlite:///:memory:')
+        Base.metadata.create_all(engine)
+        TestSession = sessionmaker(bind=engine)
+        with tempfile.TemporaryDirectory() as root, TestSession() as db:
+            primary = Path(root) / 'primary'
+            secondary = primary / 'disk-2'
+            secondary.mkdir(parents=True)
+            marker = secondary / 'keep.txt'
+            marker.write_text('preserve')
+            primary.mkdir(exist_ok=True)
+            default_device = Path(root).stat().st_dev
+            original_path_stat = Path.stat
+
+            def fake_path_stat(path, *args, **kwargs):
+                result = original_path_stat(path, *args, **kwargs)
+                if Path(path) == secondary:
+                    return SimpleNamespace(st_dev=default_device + 1)
+                return result
+
+            def fake_mount(path):
+                return Path(path).resolve() == secondary.resolve()
+
+            with (
+                patch.object(local_storage, 'TEMP_DIR', primary),
+                patch('app.routers.system.os.path.ismount', side_effect=fake_mount),
+                patch('pathlib.Path.stat', new=fake_path_stat),
+            ):
+                saved = system_router.salvar_destino_local(
+                    LocalStorageLocationRequest(nome='Disco secundário', caminho=str(secondary), ativo=True),
+                    db,
+                )
+                listed = system_router.listar_destinos_locais(db)
+                removed = system_router.excluir_destino_local(saved['id'], db)
+                marker_exists = marker.is_file()
+
+        engine.dispose()
+        self.assertEqual(saved['nome'], 'Disco secundário')
+        self.assertEqual([location['nome'] for location in listed], ['Principal', 'Disco secundário'])
+        self.assertTrue(removed['sucesso'])
+        self.assertTrue(marker_exists)
 
     def test_scheduler_is_singleton_between_modules(self):
         self.assertIs(system_router.app_scheduler, task_scheduler.scheduler)

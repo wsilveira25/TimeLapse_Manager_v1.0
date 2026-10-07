@@ -1,16 +1,14 @@
 import subprocess
 import os
-import shutil
 from datetime import datetime
-from app.core.paths import FFMPEG_BINARY, TEMP_DIR
-
-ROOT_TEMP = str(TEMP_DIR)
+from app.core.paths import FFMPEG_BINARY
+from app.services.local_storage import escolher_local_de_captura
 
 
 def capturar_frame_camera(camera_id: int, rtsp_url: str, qualidade: int = 2):
-    usage = shutil.disk_usage(ROOT_TEMP)
-    if usage.total and usage.free / usage.total <= 0.05:
-        print(f"[Câmara {camera_id}] Captura ignorada: menos de 5% de espaço livre em disco.")
+    storage_root = escolher_local_de_captura()
+    if storage_root is None:
+        print(f"[Câmara {camera_id}] Captura ignorada: todos os discos configurados têm menos de 5% de espaço livre.")
         return None
 
     agora_dt = datetime.now()
@@ -18,7 +16,7 @@ def capturar_frame_camera(camera_id: int, rtsp_url: str, qualidade: int = 2):
     qualidade = max(1, min(int(qualidade), 31))
 
     # Estrutura otimizada: /var/temp/Capturas/camera_X/DDMMYYYY
-    pasta_destino = os.path.join(ROOT_TEMP, "Capturas", f"camera_{camera_id}", pasta_dia)
+    pasta_destino = os.path.join(str(storage_root), "Capturas", f"camera_{camera_id}", pasta_dia)
     os.makedirs(pasta_destino, exist_ok=True)
 
     agora_str = agora_dt.strftime("%Y%m%d_%H%M%S")

@@ -14,11 +14,13 @@ from urllib.parse import quote
 import requests
 from requests.auth import HTTPBasicAuth
 from smb.SMBConnection import SMBConnection
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
 from app.core.paths import TEMP_DIR
 from app.models.storage import StorageBackupFile, StorageConfig
+from app.services.local_storage import identificar_caminho_local, listar_locais_armazenamento, resolver_caminho_local
 from app.services.alert_service import alertar_espaco_disco, alertar_falha_backup
 from app.services.cloud_storage import (
     GOOGLE_API_URL,
@@ -151,23 +153,33 @@ def iniciar_backup_assincrono() -> str | None:
     return job_id
 
 
-def _iter_backup_files():
-    for folder in ("Capturas", "Videos"):
-        root = ROOT_TEMP / folder
-        if not root.is_dir():
+def _iter_backup_files(db: Session):
+    seen_paths = set()
+    locations = sorted(listar_locais_armazenamento(db), key=lambda item: len(item["caminho"]), reverse=True)
+    for location in locations:
+        location_root = Path(location["caminho"])
+        if not location["padrao"] and not os.path.ismount(location_root):
             continue
-        for path in root.rglob("*"):
-            if not path.is_file():
+        for folder in ("Capturas", "Videos"):
+            root = location_root / folder
+            if not root.is_dir():
                 continue
-            if folder == "Capturas" and (path.suffix.lower() != ".jpg" or not path.name.startswith("frame_")):
-                continue
-            if folder == "Videos" and path.suffix.lower() not in VIDEO_EXTENSIONS:
-                continue
-            yield path
+            for path in root.rglob("*"):
+                if not path.is_file():
+                    continue
+                if folder == "Capturas" and (path.suffix.lower() != ".jpg" or not path.name.startswith("frame_")):
+                    continue
+                if folder == "Videos" and path.suffix.lower() not in VIDEO_EXTENSIONS:
+                    continue
+                resolved_path = path.resolve()
+                if resolved_path in seen_paths:
+                    continue
+                seen_paths.add(resolved_path)
+                yield path
 
 
-def _remote_backup_path(path):
-    local_relative = path.relative_to(ROOT_TEMP).as_posix()
+def _remote_backup_path(path, db):
+    local_relative = identificar_caminho_local(path, db)
     return posixpath.join(BACKUP_FOLDER, local_relative)
 
 
@@ -368,14 +380,45 @@ def limpar_capturas_backupeadas(
     root_path = Path(root).resolve()
     disk_usage = disk_usage or shutil.disk_usage
     verifier = verifier or _remote_copy_has_expected_size
-    usage = disk_usage(root_path)
-    percentual_livre = usage.free / usage.total if usage.total else 0
+    default_root = Path(ROOT_TEMP).resolve()
+    explicit_root = root_path != default_root
+    if explicit_root:
+        storage_roots = [root_path]
+    else:
+        storage_roots = [
+            Path(location["caminho"]).resolve()
+            for location in listar_locais_armazenamento(db)
+            if location["ativo"]
+        ]
+
+    usages = []
+    seen_devices = set()
+    for storage_root in storage_roots:
+        try:
+            usage = disk_usage(storage_root)
+            device = storage_root.stat().st_dev
+        except OSError:
+            continue
+        if device in seen_devices:
+            continue
+        seen_devices.add(device)
+        usages.append({
+            "root": storage_root,
+            "usage": usage,
+            "free_ratio": usage.free / usage.total if usage.total else 0,
+        })
+
+    total_bytes = sum(item["usage"].total for item in usages)
+    free_bytes = sum(item["usage"].free for item in usages)
+    all_locations_full = bool(usages) and all(item["free_ratio"] < min_free_ratio for item in usages)
+    percentual_livre = free_bytes / total_bytes if total_bytes else 0
     result = {
-        "precisa_limpeza": percentual_livre < min_free_ratio,
+        "precisa_limpeza": all_locations_full,
         "arquivos_removidos": 0,
         "bytes_liberados": 0,
         "percentual_livre": round(percentual_livre * 100, 1),
-        "limite_atingido": percentual_livre >= min_free_ratio,
+        "limite_atingido": not all_locations_full,
+        "locais": len(usages),
     }
     if not result["precisa_limpeza"]:
         return result
@@ -396,11 +439,19 @@ def limpar_capturas_backupeadas(
     candidatos = []
     caminhos_adicionados = set()
     for record in registros:
-        if record.local_path in caminhos_adicionados or not record.local_path.startswith(("Capturas/", "Videos/")):
+        stored_path = record.local_path.split("/", 1)[1] if record.local_path.startswith("local-") and "/" in record.local_path else record.local_path
+        if record.local_path in caminhos_adicionados or not stored_path.startswith(("Capturas/", "Videos/")):
             continue
         caminhos_adicionados.add(record.local_path)
-        caminho = (root_path / record.local_path).resolve()
-        if root_path not in caminho.parents or not caminho.is_file():
+        if explicit_root and not record.local_path.startswith("local-"):
+            caminho = (root_path / record.local_path).resolve()
+            if root_path not in caminho.parents:
+                continue
+        else:
+            caminho = resolver_caminho_local(record.local_path, db)
+        if caminho is None or not caminho.is_file():
+            continue
+        if not any(storage_root in caminho.parents for storage_root in storage_roots):
             continue
         try:
             stat = caminho.stat()
@@ -435,10 +486,16 @@ def limpar_capturas_backupeadas(
             continue
         result["arquivos_removidos"] += 1
         result["bytes_liberados"] += stat.st_size
-        usage = disk_usage(root_path)
-        percentual_livre = usage.free / usage.total if usage.total else 0
+        matching_locations = [item for item in usages if item["root"] in caminho.parents]
+        if matching_locations:
+            item = max(matching_locations, key=lambda location: len(location["root"].parts))
+            item["usage"] = disk_usage(item["root"])
+            item["free_ratio"] = item["usage"].free / item["usage"].total if item["usage"].total else 0
+        total_bytes = sum(item["usage"].total for item in usages)
+        free_bytes = sum(item["usage"].free for item in usages)
+        percentual_livre = free_bytes / total_bytes if total_bytes else 0
         result["percentual_livre"] = round(percentual_livre * 100, 1)
-        result["limite_atingido"] = percentual_livre >= min_free_ratio
+        result["limite_atingido"] = any(item["free_ratio"] >= min_free_ratio for item in usages)
         if result["limite_atingido"]:
             break
 
@@ -542,7 +599,7 @@ def _executar_backup_integral(db: Session, progress_callback=None):
     if not configuracoes:
         return {"sucesso": False, "enviados": 0, "ignorados": 0, "erros": ["Nenhum destino ativo."]}
 
-    arquivos = list(_iter_backup_files())
+    arquivos = list(_iter_backup_files(db))
     resultado = {"sucesso": True, "enviados": 0, "ignorados": 0, "erros": [], "destinos": []}
     progresso = {
         "total": len(arquivos) * len(configuracoes),
@@ -573,14 +630,14 @@ def _executar_backup_integral(db: Session, progress_callback=None):
             notificar_progresso()
         else:
             for path in arquivos:
+                local_path = identificar_caminho_local(path, db)
                 try:
                     stat = path.stat()
                     if time.time_ns() - stat.st_mtime_ns < 30 * 1_000_000_000:
                         resultado["ignorados"] += 1
                         progresso["ignorados"] += 1
                         continue
-                    local_path = path.relative_to(ROOT_TEMP).as_posix()
-                    remote_path = posixpath.join(BACKUP_FOLDER, local_path)
+                    remote_path = _remote_backup_path(path, db)
                     record = db.query(StorageBackupFile).filter_by(
                         storage_config_id=config.id,
                         local_path=local_path,
@@ -606,11 +663,11 @@ def _executar_backup_integral(db: Session, progress_callback=None):
                 except Exception as exc:
                     db.rollback()
                     progresso["falhas"] += 1
-                    erro = f"{path.relative_to(ROOT_TEMP).as_posix()}: {exc}"
+                    erro = f"{local_path}: {exc}"
                     erros_destino.append(erro)
                     existing = db.query(StorageBackupFile).filter_by(
                         storage_config_id=config.id,
-                        local_path=path.relative_to(ROOT_TEMP).as_posix(),
+                        local_path=local_path,
                     ).first()
                     if existing:
                         existing.last_error = str(exc)[:1000]
@@ -647,10 +704,12 @@ def executar_backup_agendado():
 
 
 def buscar_frames_backup(db: Session, config_id: int, camera_id: int, inicio=None, fim=None):
-    prefixo = f"Capturas/camera_{camera_id}/"
     registros = db.query(StorageBackupFile).filter(
         StorageBackupFile.storage_config_id == config_id,
-        StorageBackupFile.local_path.startswith(prefixo),
+        or_(
+            StorageBackupFile.local_path.startswith(f"Capturas/camera_{camera_id}/"),
+            StorageBackupFile.local_path.like(f"local-%/Capturas/camera_{camera_id}/%"),
+        ),
         StorageBackupFile.backed_up_at > 0,
         StorageBackupFile.last_error == "",
     ).all()
