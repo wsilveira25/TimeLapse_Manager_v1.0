@@ -49,14 +49,22 @@ install_caddy() {
     esac
 
     export DEBIAN_FRONTEND=noninteractive
+    printf '[1/4] Instalando dependências do repositório do Caddy...\n'
     apt-get update
-    apt-get install --yes debian-keyring debian-archive-keyring apt-transport-https curl gnupg
+    apt-get install --yes --no-install-recommends apt-transport-https ca-certificates curl gnupg
     install -d -o root -g root -m 0755 /usr/share/keyrings
-    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
-        | gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
-        -o /etc/apt/sources.list.d/caddy-stable.list
+    printf '[2/4] Baixando a chave e a lista de pacotes do Caddy...\n'
+    caddy_download() {
+        curl -fsSL --retry 3 --connect-timeout 15 --max-time 90 "$1" -o "$2" \
+            || curl -4 -fsSL --retry 3 --connect-timeout 15 --max-time 90 "$1" -o "$2"
+    }
+    CADDY_KEY_TMP="$(mktemp)"
+    caddy_download 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' "$CADDY_KEY_TMP"
+    gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg "$CADDY_KEY_TMP"
+    rm -f "$CADDY_KEY_TMP"
+    caddy_download 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' /etc/apt/sources.list.d/caddy-stable.list
     chmod 0644 /usr/share/keyrings/caddy-stable-archive-keyring.gpg /etc/apt/sources.list.d/caddy-stable.list
+    printf '[3/4] Instalando o Caddy...\n'
     apt-get update
     apt-get install --yes caddy
     command -v caddy >/dev/null 2>&1 && systemctl cat caddy.service >/dev/null 2>&1 || {
