@@ -139,8 +139,9 @@ with target:
     source.backup(target)
 PY
 fi
-ls -1t "$BACKUP_DIR"/app-*.tar.gz 2>/dev/null | tail -n +4 | xargs -r rm -f
-ls -1t "$BACKUP_DIR"/timelapse-*.db 2>/dev/null | tail -n +4 | xargs -r rm -f
+for pattern in 'app-*.tar.gz' 'timelapse-*.db'; do
+    find "$BACKUP_DIR" -maxdepth 1 -name "$pattern" -printf '%T@ %p\n' | sort -rn | tail -n +4 | cut -d' ' -f2- | xargs -r rm -f
+done
 
 APPLIED=1
 for item in app scripts; do rm -rf "${APP_ROOT:?}/$item"; done
