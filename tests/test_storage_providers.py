@@ -808,7 +808,7 @@ class StorageProviderSummaryTests(unittest.TestCase):
 
             def fake_path_stat(path, *args, **kwargs):
                 result = original_path_stat(path, *args, **kwargs)
-                if Path(path).resolve() == secondary.resolve():
+                if os.path.realpath(path) == os.path.realpath(secondary):
                     return SimpleNamespace(st_dev=result.st_dev + 1)
                 return result
 
@@ -882,7 +882,7 @@ class StorageProviderSummaryTests(unittest.TestCase):
 
             def fake_path_stat(path, *args, **kwargs):
                 result = original_path_stat(path, *args, **kwargs)
-                if Path(path).resolve() == secondary.resolve():
+                if os.path.realpath(path) == os.path.realpath(secondary):
                     return SimpleNamespace(st_dev=result.st_dev + 1)
                 return result
 
@@ -926,7 +926,7 @@ class StorageProviderSummaryTests(unittest.TestCase):
 
             def fake_path_stat(path, *args, **kwargs):
                 result = original_path_stat(path, *args, **kwargs)
-                if Path(path).resolve() == secondary.resolve():
+                if os.path.realpath(path) == os.path.realpath(secondary):
                     return SimpleNamespace(st_dev=default_device + 1)
                 return result
 
