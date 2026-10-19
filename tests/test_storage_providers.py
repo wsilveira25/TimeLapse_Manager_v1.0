@@ -1,5 +1,6 @@
 import unittest
 import os
+import sys
 import threading
 import tempfile
 from datetime import date
@@ -737,7 +738,7 @@ class StorageProviderSummaryTests(unittest.TestCase):
         Base.metadata.create_all(engine)
         TestSession = sessionmaker(bind=engine)
         with tempfile.TemporaryDirectory() as root, TestSession() as db:
-            primary = Path(root)
+            primary = Path(root).resolve()
             secondary = primary / 'disk-2'
             secondary.mkdir()
             db.add(LocalStorageLocation(nome='Disco 2', caminho=str(secondary), ativo=True))
@@ -768,7 +769,7 @@ class StorageProviderSummaryTests(unittest.TestCase):
         TestSession = sessionmaker(bind=engine)
         now = 2_000_000_000
         with tempfile.TemporaryDirectory() as root, TestSession() as db:
-            primary = Path(root)
+            primary = Path(root).resolve()
             secondary = primary / 'disk-2'
             capture_dir = primary / 'Capturas' / 'camera_1'
             capture_dir.mkdir(parents=True)
@@ -843,7 +844,7 @@ class StorageProviderSummaryTests(unittest.TestCase):
         TestSession = sessionmaker(bind=engine)
         now = 2_000_000_000
         with tempfile.TemporaryDirectory() as root, TestSession() as db:
-            primary = Path(root)
+            primary = Path(root).resolve()
             secondary = primary / 'disk-2'
             capture_dir = secondary / 'Capturas' / 'camera_1'
             capture_dir.mkdir(parents=True)
@@ -910,6 +911,7 @@ class StorageProviderSummaryTests(unittest.TestCase):
         self.assertTrue(removed)
         self.assertEqual(result['arquivos_removidos'], 1)
 
+    @unittest.skipIf(sys.platform == 'win32', 'Pontos de montagem POSIX; o servidor de armazenamento local é Linux.')
     def test_local_storage_api_registers_mount_and_remove_keeps_files(self):
         engine = create_engine('sqlite:///:memory:')
         Base.metadata.create_all(engine)
