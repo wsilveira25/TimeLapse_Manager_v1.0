@@ -100,6 +100,8 @@ def require_auth(request: Request, db: Session = Depends(get_db)) -> SystemUser 
 
     public_paths = {
         "/login",
+        "/privacidade",
+        "/termos",
         "/forgot-password",
         "/reset-password",
         "/api/auth/forgot",

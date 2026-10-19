@@ -1,3 +1,4 @@
+import concurrent.futures
 import ftplib
 import logging
 import os
@@ -8,6 +9,7 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import quote
 
@@ -41,6 +43,12 @@ active_backup_job_id: str | None = None
 last_backup_job_id: str | None = None
 MIN_FREE_SPACE_RATIO = 0.20
 MIN_LOCAL_FILE_AGE_SECONDS = 30 * 24 * 60 * 60
+try:
+    BACKUP_UPLOAD_WORKERS = int(os.getenv("TIMELAPSE_BACKUP_UPLOAD_WORKERS", "4"))
+except ValueError:
+    BACKUP_UPLOAD_WORKERS = 4
+BACKUP_UPLOAD_WORKERS = min(max(BACKUP_UPLOAD_WORKERS, 1), 8)
+MAX_PENDING_UPLOADS = BACKUP_UPLOAD_WORKERS * 2
 
 
 def obter_status_backup(job_id: str | None = None) -> dict[str, Any] | None:
@@ -50,6 +58,41 @@ def obter_status_backup(job_id: str | None = None) -> dict[str, Any] | None:
             return None
         status = backup_jobs.get(status_id)
         return dict(status) if status else None
+
+
+def _backup_record_matches_file(record: StorageBackupFile | None, file_stat: os.stat_result) -> bool:
+    if (
+        record is None
+        or not record.backed_up_at
+        or record.file_size != file_stat.st_size
+        or record.file_mtime_ns != file_stat.st_mtime_ns
+    ):
+        return False
+    record.last_error = ""
+    return True
+
+
+def _nome_destino_backup(config: StorageConfig) -> str:
+    tipo = config.tipo.lower()
+    nomes = {
+        "smb": "Armazenamento SMB",
+        "ftp": "Armazenamento FTP",
+        "webdav": "Armazenamento WebDAV",
+        "google_drive": "Google Drive",
+        "onedrive": "OneDrive",
+    }
+    return nomes.get(tipo, config.nome or config.tipo)
+
+
+def _criar_config_upload(config: StorageConfig) -> SimpleNamespace:
+    valores = {
+        column.name: getattr(config, column.name)
+        for column in StorageConfig.__table__.columns
+    }
+    upload_config = SimpleNamespace(**valores)
+    upload_config._oauth_token_lock = threading.RLock()
+    upload_config._google_folder_cache_lock = threading.RLock()
+    return upload_config
 
 
 def _criar_job_backup() -> tuple[str | None, bool]:
@@ -595,87 +638,179 @@ def executar_backup_integral(db: Session, progress_callback=None):
 
 
 def _executar_backup_integral(db: Session, progress_callback=None):
-    configuracoes = db.query(StorageConfig).filter(StorageConfig.ativo.is_(True)).all()
+    configuracoes = db.query(StorageConfig).filter(StorageConfig.ativo.is_(True)).order_by(StorageConfig.id).all()
     if not configuracoes:
         return {"sucesso": False, "enviados": 0, "ignorados": 0, "erros": ["Nenhum destino ativo."]}
 
     arquivos = list(_iter_backup_files(db))
     resultado = {"sucesso": True, "enviados": 0, "ignorados": 0, "erros": [], "destinos": []}
+    destinos = [
+        {
+            "id": config.id,
+            "nome": _nome_destino_backup(config),
+            "total": len(arquivos),
+            "concluidos": 0,
+            "enviados": 0,
+            "ignorados": 0,
+            "falhas": 0,
+        }
+        for config in configuracoes
+    ]
+    destinos_por_id = {config.id: destino for config, destino in zip(configuracoes, destinos)}
+    erros_por_config = {config.id: [] for config in configuracoes}
     progresso = {
-        "total": len(arquivos) * len(configuracoes),
+        "total": len(arquivos),
         "concluidos": 0,
         "enviados": 0,
         "ignorados": 0,
         "falhas": 0,
+        "destino_atual": "",
     }
 
     def notificar_progresso():
         if progress_callback:
-            percentual = int(progresso["concluidos"] * 100 / progresso["total"]) if progresso["total"] else 0
+            destino_atual = progresso["destino_atual"]
             progress_callback({
                 **progresso,
-                "percentual": percentual,
-                "mensagem": f"Processando {progresso['concluidos']:,} de {progresso['total']:,} arquivos.".replace(",", "."),
+                "percentual": int(progresso["concluidos"] * 100 / progresso["total"]) if progresso["total"] else 0,
+                "mensagem": f"{destino_atual}: processando {progresso['concluidos']:,} de {progresso['total']:,} arquivos únicos.".replace(",", "."),
+                "destinos": [dict(destino) for destino in destinos],
             })
 
     notificar_progresso()
     agora = int(time.time())
 
     for config in configuracoes:
-        erros_destino = []
-        if config.tipo.lower() in {"google_drive", "onedrive"} and not config.oauth_refresh_token:
+        erros_destino = erros_por_config[config.id]
+        destino = destinos_por_id[config.id]
+        progresso.update({
+            "concluidos": 0,
+            "enviados": 0,
+            "ignorados": 0,
+            "falhas": 0,
+            "destino_atual": destino["nome"],
+        })
+        notificar_progresso()
+        sem_token_oauth = config.tipo.lower() in {"google_drive", "onedrive"} and not config.oauth_refresh_token
+        if sem_token_oauth:
             erros_destino.append("Conta cloud não conectada por OAuth.")
-            progresso["concluidos"] += len(arquivos)
-            progresso["falhas"] += len(arquivos)
+            destino["falhas"] = len(arquivos)
+            destino["concluidos"] = len(arquivos)
+            progresso.update({"falhas": len(arquivos), "concluidos": len(arquivos)})
             notificar_progresso()
         else:
-            for path in arquivos:
-                local_path = identificar_caminho_local(path, db)
-                try:
-                    stat = path.stat()
-                    if time.time_ns() - stat.st_mtime_ns < 30 * 1_000_000_000:
-                        resultado["ignorados"] += 1
-                        progresso["ignorados"] += 1
-                        continue
-                    remote_path = _remote_backup_path(path, db)
-                    record = db.query(StorageBackupFile).filter_by(
-                        storage_config_id=config.id,
-                        local_path=local_path,
-                    ).first()
-                    if record and record.backed_up_at and record.file_size == stat.st_size and record.file_mtime_ns == stat.st_mtime_ns:
-                        resultado["ignorados"] += 1
-                        progresso["ignorados"] += 1
-                        continue
+            upload_config = _criar_config_upload(config)
+            pendentes = {}
 
-                    remote = upload_backup_file(path, config, remote_path)
-                    if record is None:
-                        record = StorageBackupFile(storage_config_id=config.id, local_path=local_path)
-                        db.add(record)
-                    record.remote_path = remote_path
-                    record.remote_id = remote.get("id", "") or ""
-                    record.file_size = stat.st_size
-                    record.file_mtime_ns = stat.st_mtime_ns
-                    record.backed_up_at = int(time.time())
-                    record.last_error = ""
-                    db.commit()
-                    resultado["enviados"] += 1
-                    progresso["enviados"] += 1
-                except Exception as exc:
-                    db.rollback()
-                    progresso["falhas"] += 1
-                    erro = f"{local_path}: {exc}"
-                    erros_destino.append(erro)
-                    existing = db.query(StorageBackupFile).filter_by(
-                        storage_config_id=config.id,
-                        local_path=local_path,
-                    ).first()
-                    if existing:
-                        existing.last_error = str(exc)[:1000]
+            def concluir_uploads(futuros_concluidos):
+                for future in futuros_concluidos:
+                    path, local_path, stat, remote_path = pendentes.pop(future)
+                    try:
+                        remote = future.result()
+                        record = db.query(StorageBackupFile).filter_by(
+                            storage_config_id=config.id,
+                            local_path=local_path,
+                        ).first()
+                        if record is None:
+                            record = StorageBackupFile(storage_config_id=config.id, local_path=local_path)
+                            db.add(record)
+                        record.remote_path = remote_path
+                        record.remote_id = remote.get("id", "") or ""
+                        record.file_size = stat.st_size
+                        record.file_mtime_ns = stat.st_mtime_ns
+                        record.backed_up_at = int(time.time())
+                        record.last_error = ""
                         db.commit()
-                finally:
-                    progresso["concluidos"] += 1
-                    notificar_progresso()
+                        resultado["enviados"] += 1
+                        progresso["enviados"] += 1
+                        destino["enviados"] += 1
+                    except Exception as exc:
+                        db.rollback()
+                        progresso["falhas"] += 1
+                        destino["falhas"] += 1
+                        erros_destino.append(f"{local_path}: {exc}")
+                        existing = db.query(StorageBackupFile).filter_by(
+                            storage_config_id=config.id,
+                            local_path=local_path,
+                        ).first()
+                        if existing:
+                            existing.last_error = str(exc)[:1000]
+                            db.commit()
+                    finally:
+                        destino["concluidos"] += 1
+                        progresso["concluidos"] = destino["concluidos"]
+                        notificar_progresso()
 
+            with concurrent.futures.ThreadPoolExecutor(max_workers=BACKUP_UPLOAD_WORKERS) as executor:
+                for path in arquivos:
+                    local_path = str(path)
+                    try:
+                        local_path = identificar_caminho_local(path, db)
+                        stat = path.stat()
+                        if time.time_ns() - stat.st_mtime_ns < 30 * 1_000_000_000:
+                            resultado["ignorados"] += 1
+                            progresso["ignorados"] += 1
+                            destino["ignorados"] += 1
+                            destino["concluidos"] += 1
+                            progresso["concluidos"] = destino["concluidos"]
+                            notificar_progresso()
+                            continue
+                        record = db.query(StorageBackupFile).filter_by(
+                            storage_config_id=config.id,
+                            local_path=local_path,
+                        ).first()
+                        had_stale_error = bool(record and record.last_error)
+                        if _backup_record_matches_file(record, stat):
+                            if had_stale_error:
+                                db.commit()
+                            resultado["ignorados"] += 1
+                            progresso["ignorados"] += 1
+                            destino["ignorados"] += 1
+                            destino["concluidos"] += 1
+                            progresso["concluidos"] = destino["concluidos"]
+                            notificar_progresso()
+                            continue
+
+                        remote_path = _remote_backup_path(path, db)
+                        future = executor.submit(upload_backup_file, path, upload_config, remote_path)
+                        pendentes[future] = (path, local_path, stat, remote_path)
+                        if len(pendentes) >= MAX_PENDING_UPLOADS:
+                            done, _ = concurrent.futures.wait(
+                                pendentes,
+                                return_when=concurrent.futures.FIRST_COMPLETED,
+                            )
+                            concluir_uploads(done)
+                    except Exception as exc:
+                        db.rollback()
+                        progresso["falhas"] += 1
+                        destino["falhas"] += 1
+                        erros_destino.append(f"{local_path}: {exc}")
+                        existing = db.query(StorageBackupFile).filter_by(
+                            storage_config_id=config.id,
+                            local_path=local_path,
+                        ).first()
+                        if existing:
+                            existing.last_error = str(exc)[:1000]
+                            db.commit()
+                        destino["concluidos"] += 1
+                        progresso["concluidos"] = destino["concluidos"]
+                        notificar_progresso()
+
+                while pendentes:
+                    done, _ = concurrent.futures.wait(
+                        pendentes,
+                        return_when=concurrent.futures.FIRST_COMPLETED,
+                    )
+                    concluir_uploads(done)
+
+            if config.tipo.lower() in {"google_drive", "onedrive"}:
+                config.oauth_access_token = upload_config.oauth_access_token
+                config.oauth_refresh_token = upload_config.oauth_refresh_token
+                config.oauth_token_expires_at = upload_config.oauth_token_expires_at
+                db.commit()
+
+    for config in configuracoes:
+        erros_destino = erros_por_config[config.id]
         if erros_destino:
             resultado["sucesso"] = False
             resultado["erros"].append({config.nome or config.tipo: erros_destino})
@@ -689,7 +824,7 @@ def _executar_backup_integral(db: Session, progress_callback=None):
         else:
             config.backup_error = ""
             config.backup_last_success_at = agora
-        resultado["destinos"].append(config.nome or config.tipo)
+        resultado["destinos"].append(_nome_destino_backup(config))
         db.commit()
 
     return resultado

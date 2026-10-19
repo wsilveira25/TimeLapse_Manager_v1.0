@@ -1,5 +1,6 @@
 import os
 import posixpath
+import threading
 import time
 import mimetypes
 from urllib.parse import quote, urlencode
@@ -47,7 +48,7 @@ def _provider_config(tipo):
         return {
             "authorization_url": GOOGLE_AUTH_URL,
             "token_url": GOOGLE_TOKEN_URL,
-            "scopes": "openid email https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.metadata.readonly",
+            "scopes": "openid email https://www.googleapis.com/auth/drive.file",
         }
     if tipo == "onedrive":
         return {
@@ -116,9 +117,13 @@ def _refresh_access_token(config):
 def get_access_token(config):
     if not config.oauth_refresh_token:
         raise RuntimeError("A conta ainda não foi conectada por OAuth.")
-    if not config.oauth_access_token or int(config.oauth_token_expires_at or 0) <= int(time.time()) + 60:
-        return _refresh_access_token(config)
-    return config.oauth_access_token
+    token_lock = getattr(config, "_oauth_token_lock", None)
+    if token_lock is None:
+        token_lock = threading.RLock()
+    with token_lock:
+        if not config.oauth_access_token or int(config.oauth_token_expires_at or 0) <= int(time.time()) + 60:
+            return _refresh_access_token(config)
+        return config.oauth_access_token
 
 
 def get_storage_quota(config):
@@ -154,6 +159,7 @@ def get_storage_quota(config):
     config.usado_bytes = used
     config.livre_bytes = max(total - used, 0)
     config.percentagem_uso = round((used / total) * 100, 1) if total else 0
+    config.storage_error = ""
     return {"total_bytes": total, "usado_bytes": used}
 
 
@@ -190,21 +196,26 @@ def _find_or_create_google_folder(name, parent_id, token):
 
 
 def _google_folder_for_remote_path(config, remote_path, token):
-    parent_id = "root"
-    base_path = (config.caminho_remoto or "").strip("/")
-    folder_path = posixpath.join(base_path, posixpath.dirname(remote_path or ""))
     folder_cache = getattr(config, "_google_folder_id_cache", None)
     if folder_cache is None:
         folder_cache = {}
         config._google_folder_id_cache = folder_cache
+    folder_lock = getattr(config, "_google_folder_cache_lock", None)
+    if folder_lock is None:
+        folder_lock = threading.RLock()
+        config._google_folder_cache_lock = folder_lock
 
-    for folder in folder_path.split("/"):
-        if folder:
-            cache_key = (parent_id, folder)
-            if cache_key not in folder_cache:
-                folder_cache[cache_key] = _find_or_create_google_folder(folder, parent_id, token)
-            parent_id = folder_cache[cache_key]
-    return parent_id
+    with folder_lock:
+        parent_id = "root"
+        base_path = (config.caminho_remoto or "").strip("/")
+        folder_path = posixpath.join(base_path, posixpath.dirname(remote_path or ""))
+        for folder in folder_path.split("/"):
+            if folder:
+                cache_key = (parent_id, folder)
+                if cache_key not in folder_cache:
+                    folder_cache[cache_key] = _find_or_create_google_folder(folder, parent_id, token)
+                parent_id = folder_cache[cache_key]
+        return parent_id
 
 
 def _upload_google_drive(path, config, token, remote_path=None):

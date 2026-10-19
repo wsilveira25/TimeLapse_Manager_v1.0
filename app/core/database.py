@@ -69,6 +69,8 @@ def ensure_alert_schema():
     migrations = {
         'system_settings': {
             'alert_camera_failure': 'BOOLEAN NOT NULL DEFAULT 1',
+            'domain_name': "VARCHAR NOT NULL DEFAULT ''",
+            'auto_update_enabled': 'BOOLEAN NOT NULL DEFAULT 0',
         },
         'cameras': {
             'last_capture_alert_at': 'INTEGER NOT NULL DEFAULT 0',

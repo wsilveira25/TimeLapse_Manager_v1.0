@@ -1,10 +1,17 @@
 import copy
+import ipaddress
 import logging
 import os
+import re
 import secrets
+import socket
+import ssl
+import subprocess
 import sys
 import threading
+import tempfile
 import time
+from urllib.parse import urlsplit
 from pathlib import Path
 from typing import Literal
 
@@ -15,6 +22,7 @@ from sqlalchemy.orm import Session
 from fastapi.responses import RedirectResponse
 from app.core.auth import require_admin
 from app.core.database import SessionLocal, get_db
+from app.core.oauth_urls import obter_oauth_redirect_uri, validar_oauth_redirect_uri
 from app.models.storage import LocalStorageLocation, StorageBackupFile, StorageConfig, SystemSettings
 from app.services.cloud_storage import (
     build_authorization_url,
@@ -35,6 +43,15 @@ from app.services.local_storage import (
     listar_locais_armazenamento,
     somar_uso_locais_armazenamento,
 )
+from app.services.update_service import (
+    atualizacao_disponivel,
+    atualizacao_em_andamento,
+    atualizador_instalado,
+    consultar_ultima_release,
+    resumo_atualizacao,
+    solicitar_atualizacao,
+    versao_atual,
+)
 from app.tasks.scheduler import scheduler as app_scheduler, executar_reinicio_processo
 
 router = APIRouter(prefix="/api/system", tags=["Sistema"])
@@ -42,6 +59,113 @@ logger = logging.getLogger(__name__)
 
 #PASTA_POOL_BASE = "/var/temp/Capturas"
 TAMANHO_PADRAO_FALLBACK = 450 * 1024  # 450 KB de segurança caso ainda não haja fotos
+OAUTH_CALLBACK_PATH = "/api/system/storage/oauth/callback"
+GOOGLE_DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+DOMAIN_CONFIG_PATH = Path(os.getenv("TIMELAPSE_DOMAIN_CONFIG_FILE", "/var/lib/timelapse/domain.env"))
+DOMAIN_SETUP_UNIT = "timelapse-domain-setup.service"
+DOMAIN_SETUP_UNIT_PATH = Path("/etc/systemd/system") / DOMAIN_SETUP_UNIT
+DOMAIN_SETUP_SUDOERS_PATH = Path("/etc/sudoers.d/timelapse-domain-setup")
+SYSTEMCTL_PATH = "/usr/bin/systemctl"
+SUDO_PATH = "/usr/bin/sudo"
+
+
+def normalizar_dominio(dominio: str) -> str:
+    dominio = (dominio or "").strip()
+    if not dominio:
+        raise ValueError("Informe um domínio para configurar o HTTPS.")
+    if "://" in dominio:
+        parsed = urlsplit(dominio)
+        if parsed.scheme.lower() != "https" or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("Use um domínio simples ou uma URL iniciada por https://.")
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError("A porta informada é inválida.") from exc
+        if port not in (None, 443) or parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+            raise ValueError("Informe somente o domínio, sem porta diferente de 443, caminho ou parâmetros.")
+        dominio = parsed.hostname
+    dominio = dominio.rstrip(".")
+    if any(char in dominio for char in "/:@?#"):
+        raise ValueError("Informe somente o hostname, sem porta ou caminho.")
+    try:
+        dominio = dominio.encode("idna").decode("ascii").lower()
+    except UnicodeError as exc:
+        raise ValueError("O domínio informado não é válido.") from exc
+    if len(dominio) > 253 or "." not in dominio:
+        raise ValueError("Informe um domínio DNS público completo, como timelapse.exemplo.com.")
+    try:
+        ipaddress.ip_address(dominio)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("Informe um domínio DNS, não um endereço IP.")
+    labels = dominio.split(".")
+    if any(
+        not label
+        or len(label) > 63
+        or not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", label)
+        for label in labels
+    ):
+        raise ValueError("O hostname contém um rótulo DNS inválido.")
+    return dominio
+
+
+def salvar_dominio_helper(dominio: str) -> None:
+    DOMAIN_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=DOMAIN_CONFIG_PATH.parent,
+            prefix=".domain-",
+            delete=False,
+        ) as temporary_file:
+            temporary_file.write(f"DOMAIN_NAME={dominio}\n")
+            temporary_path = Path(temporary_file.name)
+        os.chmod(temporary_path, 0o600)
+        os.replace(temporary_path, DOMAIN_CONFIG_PATH)
+    finally:
+        if temporary_path and temporary_path.exists():
+            temporary_path.unlink()
+
+
+def status_servico_dominio() -> dict[str, str]:
+    if not DOMAIN_SETUP_UNIT_PATH.is_file():
+        return {"active_state": "not-installed", "result": "unknown"}
+    try:
+        result = subprocess.run(
+            [SYSTEMCTL_PATH, "show", DOMAIN_SETUP_UNIT, "--property=ActiveState", "--property=SubState", "--property=Result"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {"active_state": "unknown", "result": "unknown"}
+    values = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+    return {
+        "active_state": values.get("ActiveState", "unknown"),
+        "sub_state": values.get("SubState", "unknown"),
+        "result": values.get("Result", "unknown"),
+    }
+
+
+def certificado_dominio_valido(dominio: str) -> tuple[bool, str]:
+    if not dominio:
+        return False, ""
+    context = ssl.create_default_context()
+    try:
+        with socket.create_connection(("127.0.0.1", 443), timeout=2) as connection:
+            with context.wrap_socket(connection, server_hostname=dominio) as secured_connection:
+                certificate = secured_connection.getpeercert()
+        return True, certificate.get("notAfter", "")
+    except (OSError, ssl.SSLError, TimeoutError):
+        return False, ""
+
+
+def google_drive_file_scope_concedido(scope: str) -> bool:
+    return GOOGLE_DRIVE_FILE_SCOPE in (scope or "").split()
 
 
 def build_provider_summary(
@@ -457,6 +581,127 @@ class AlertSettingsRequest(BaseModel):
     alert_cooldown_minutes: int = 30
 
 
+class DomainSettingsRequest(BaseModel):
+    domain_name: str = ""
+
+
+@router.get("/domain", dependencies=[Depends(require_admin)])
+def obter_config_dominio(db: Session = Depends(get_db)):
+    settings = db.query(SystemSettings).filter(SystemSettings.id == 1).first()
+    domain_name = settings.domain_name if settings else ""
+    expected_public_url = f"https://{domain_name}" if domain_name else ""
+    expected_callback = f"{expected_public_url}{OAUTH_CALLBACK_PATH}" if domain_name else ""
+    configured_public_url = os.getenv("TIMELAPSE_PUBLIC_URL", "").rstrip("/")
+    configured_callback = os.getenv("TIMELAPSE_OAUTH_REDIRECT_URI", "").strip()
+    provision_status = status_servico_dominio()
+    certificate_valid, certificate_expires_at = certificado_dominio_valido(domain_name)
+    return {
+        "domain_name": domain_name,
+        "public_url": configured_public_url,
+        "oauth_redirect_uri": expected_callback,
+        "aplicado": bool(domain_name and configured_public_url == expected_public_url and configured_callback == expected_callback),
+        "provisioner_installed": DOMAIN_SETUP_UNIT_PATH.is_file() and DOMAIN_SETUP_SUDOERS_PATH.is_file(),
+        "provisioning_state": provision_status["active_state"],
+        "provisioning_result": provision_status["result"],
+        "provisioning_in_progress": provision_status["active_state"] in {"activating", "reloading"},
+        "certificate_valid": certificate_valid,
+        "certificate_expires_at": certificate_expires_at,
+        "script_path": str(Path(__file__).resolve().parents[2] / "scripts" / "configure-domain.sh"),
+    }
+
+
+@router.post("/domain", dependencies=[Depends(require_admin)])
+def salvar_config_dominio(dados: DomainSettingsRequest, db: Session = Depends(get_db)):
+    try:
+        domain_name = normalizar_dominio(dados.domain_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    settings = db.query(SystemSettings).filter(SystemSettings.id == 1).first()
+    if settings is None:
+        settings = SystemSettings(id=1)
+        db.add(settings)
+    settings.domain_name = domain_name
+    try:
+        db.flush()
+        salvar_dominio_helper(domain_name)
+    except OSError as exc:
+        db.rollback()
+        raise HTTPException(status_code=503, detail="Não foi possível gravar o domínio para o serviço de certificados.") from exc
+    db.commit()
+    return {"sucesso": True, "domain_name": domain_name, "mensagem": "Domínio salvo. Use Gerar certificado para configurar HTTPS."}
+
+
+@router.post("/domain/provision", status_code=202, dependencies=[Depends(require_admin)])
+def provisionar_certificado_dominio(db: Session = Depends(get_db)):
+    settings = db.query(SystemSettings).filter(SystemSettings.id == 1).first()
+    domain_name = settings.domain_name if settings else ""
+    if not domain_name:
+        raise HTTPException(status_code=400, detail="Salve um domínio válido antes de gerar o certificado.")
+    if not (DOMAIN_SETUP_UNIT_PATH.is_file() and DOMAIN_SETUP_SUDOERS_PATH.is_file()):
+        script_path = Path(__file__).resolve().parents[2] / "scripts" / "configure-domain.sh"
+        raise HTTPException(
+            status_code=503,
+            detail=f"A ativação inicial ainda não foi preparada. Execute uma vez: sudo bash {script_path} {domain_name}",
+        )
+    try:
+        result = subprocess.run(
+            [SUDO_PATH, "-n", SYSTEMCTL_PATH, "--no-block", "restart", DOMAIN_SETUP_UNIT],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise HTTPException(status_code=503, detail="Não foi possível iniciar o serviço de certificados.") from exc
+    if result.returncode:
+        raise HTTPException(status_code=503, detail="A ativação privilegiada não está autorizada. Execute novamente o configurador como administrador.")
+    return {"sucesso": True, "mensagem": f"Configuração HTTPS iniciada para {domain_name}. O Caddy solicitará o certificado automaticamente."}
+
+
+class UpdateSettingsRequest(BaseModel):
+    auto_update_enabled: bool = False
+
+
+@router.get("/update", dependencies=[Depends(require_admin)])
+def obter_estado_atualizacao(refresh: bool = False, db: Session = Depends(get_db)):
+    settings = db.query(SystemSettings).filter(SystemSettings.id == 1).first()
+    resumo = resumo_atualizacao(forcar=refresh)
+    resumo["auto_update_enabled"] = bool(settings and settings.auto_update_enabled)
+    return resumo
+
+
+@router.post("/update/settings", dependencies=[Depends(require_admin)])
+def salvar_config_atualizacao(dados: UpdateSettingsRequest, db: Session = Depends(get_db)):
+    settings = db.query(SystemSettings).filter(SystemSettings.id == 1).first()
+    if settings is None:
+        settings = SystemSettings(id=1)
+        db.add(settings)
+    settings.auto_update_enabled = dados.auto_update_enabled
+    db.commit()
+    return {"sucesso": True, "auto_update_enabled": settings.auto_update_enabled}
+
+
+@router.post("/update/apply", status_code=202, dependencies=[Depends(require_admin)])
+def aplicar_atualizacao():
+    if not atualizador_instalado():
+        raise HTTPException(
+            status_code=503,
+            detail="O atualizador automático ainda não foi ativado. Execute uma vez no servidor: sudo bash scripts/update-linux.sh --setup",
+        )
+    if atualizacao_em_andamento():
+        raise HTTPException(status_code=409, detail="Já existe uma atualização em andamento.")
+    release, erro = consultar_ultima_release(forcar=True)
+    if not release:
+        raise HTTPException(status_code=502, detail=erro or "Não foi possível consultar a última versão.")
+    if not atualizacao_disponivel(versao_atual(), release["version"]):
+        raise HTTPException(status_code=409, detail="O sistema já está na versão mais recente.")
+    try:
+        solicitar_atualizacao(release["tag"])
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail="Não foi possível registrar o pedido de atualização.") from exc
+    return {"sucesso": True, "version": release["version"], "mensagem": f"Atualização para a versão {release['version']} iniciada. O sistema reiniciará automaticamente."}
+
+
 @router.get("/alerts/config", dependencies=[Depends(require_admin)])
 def obter_config_alertas(db: Session = Depends(get_db)):
     return resumo_config_smtp(buscar_config_smtp(db))
@@ -521,17 +766,19 @@ def testar_config_alertas(db: Session = Depends(get_db)):
 
 @router.get("/storage/config", dependencies=[Depends(require_admin)])
 def obter_config_nuvem(
+    request: Request,
     tipo: str | None = None,
     config_id: int | None = None,
     db: Session = Depends(get_db),
 ):
     query = db.query(StorageConfig)
+    oauth_redirect_uri = obter_oauth_redirect_uri(request)
     if config_id is not None:
         config = query.filter(StorageConfig.id == config_id).first()
     else:
         config = query.filter(StorageConfig.tipo == tipo).first() if tipo else query.first()
     if not config:
-        return {"configurado": False}
+        return {"configurado": False, "oauth_redirect_uri": oauth_redirect_uri}
     return {
         "configurado": True,
         "id": config.id,
@@ -544,6 +791,7 @@ def obter_config_nuvem(
         "total_bytes": config.total_bytes,
         "usado_bytes": config.usado_bytes,
         "oauth_client_id": config.oauth_client_id,
+        "oauth_redirect_uri": oauth_redirect_uri,
         "possui_client_id": bool(config.oauth_client_id),
         "conectado": bool(config.oauth_refresh_token) if config.tipo in {'google_drive', 'onedrive'} else False,
         "storage_error": config.storage_error or "",
@@ -603,10 +851,15 @@ def iniciar_oauth(
     if not config or not config.oauth_client_id or not config.oauth_client_secret:
         raise HTTPException(status_code=400, detail="Salve o Client ID e o Client Secret antes de conectar.")
 
+    callback_url = obter_oauth_redirect_uri(request)
+    try:
+        validar_oauth_redirect_uri(callback_url)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     state = secrets.token_urlsafe(32)
     config.oauth_state = state
     db.commit()
-    callback_url = str(request.url_for("storage_oauth_callback"))
     authorization_url = build_authorization_url(tipo, config.oauth_client_id, callback_url, state)
     return RedirectResponse(authorization_url, status_code=302)
 
@@ -618,6 +871,7 @@ def concluir_oauth(
     config_id: int | None = None,
     code: str | None = None,
     error: str | None = None,
+    scope: str | None = None,
     db: Session = Depends(get_db),
 ):
     if error:
@@ -629,10 +883,22 @@ def concluir_oauth(
     tipo = config.tipo.lower()
     if tipo not in {'google_drive', 'onedrive'}:
         raise HTTPException(status_code=400, detail="O estado OAuth não pertence a um provedor compatível.")
+    if tipo == "google_drive" and not google_drive_file_scope_concedido(scope or ""):
+        config.oauth_state = ""
+        config.oauth_access_token = ""
+        config.oauth_refresh_token = ""
+        config.oauth_token_expires_at = 0
+        config.storage_error = "O Google não concedeu o escopo drive.file. Autorize novamente e marque a permissão do Drive."
+        db.commit()
+        return RedirectResponse("/?storage_oauth=drive_scope_missing", status_code=303)
     if not code:
         raise HTTPException(status_code=400, detail="O provedor não retornou o código de autorização.")
 
-    callback_url = str(request.url_for("storage_oauth_callback"))
+    try:
+        callback_url = obter_oauth_redirect_uri(request)
+        validar_oauth_redirect_uri(callback_url)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
         token_data = exchange_authorization_code(
             tipo,

@@ -33,7 +33,7 @@ jobs:
           python -m pip install -r requirements-windows-build.txt
 
       - name: Run application tests
-        run: python -m unittest discover -s tests -p test_storage_providers.py -v
+        run: python -m unittest discover -s tests -p "test_*.py" -v
 
       - name: Build Linux source package
         run: python scripts/package.py

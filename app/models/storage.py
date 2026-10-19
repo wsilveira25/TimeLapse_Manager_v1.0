@@ -60,6 +60,8 @@ class SystemSettings(Base):
     __tablename__ = "system_settings"
 
     id = Column(Integer, primary_key=True, default=1)
+    domain_name = Column(String, nullable=False, default="")
+    auto_update_enabled = Column(Boolean, nullable=False, default=False)
     smtp_enabled = Column(Boolean, nullable=False, default=False)
     smtp_host = Column(String, nullable=False, default="")
     smtp_port = Column(Integer, nullable=False, default=587)

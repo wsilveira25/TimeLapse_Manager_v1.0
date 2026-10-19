@@ -31,6 +31,14 @@ def obter_info_frames(camera_id: int):
         "ultimo": todas_imagens[-1].replace("frame_", "").replace(".jpg", "")
     }
 
+
+def _resumir_erro_ffmpeg(stderr: str) -> str:
+    linhas = [linha.strip() for linha in (stderr or "").splitlines() if linha.strip()]
+    resumo = "\n".join(linhas[-12:])
+    if len(resumo) > 3000:
+        resumo = resumo[-3000:]
+    return resumo or "O FFmpeg terminou sem gerar o arquivo de vídeo."
+
 def gerar_timelapse(camera_id: int, data_inicio: str, data_fim: str, fps: int = 30, resolucao: str = "original", crf: int = 23, formato: str = "mp4", codec: str = "libx264", caminhos_frames=None):
     dt_inicio = datetime.strptime(data_inicio, "%Y-%m-%dT%H:%M")
     dt_fim = datetime.strptime(data_fim, "%Y-%m-%dT%H:%M")
@@ -49,16 +57,17 @@ def gerar_timelapse(camera_id: int, data_inicio: str, data_fim: str, fps: int = 
 
     imagens_filtradas = []
     for caminho_img in todas_imagens_paths:
-        img_nome = os.path.basename(caminho_img)
-        data_str = img_nome.replace("frame_", "").replace(".jpg", "")
+        img_nome = Path(caminho_img).name
+        data_str = img_nome.removeprefix("frame_").removesuffix(".jpg")
         dt_img = datetime.strptime(data_str, "%Y%m%d_%H%M%S")
         if dt_inicio <= dt_img <= dt_fim:
-            imagens_filtradas.append(caminho_img)
+            imagens_filtradas.append((dt_img, caminho_img))
 
     if len(imagens_filtradas) < 10:
         return {"sucesso": False, "erro": f"Apenas {len(imagens_filtradas)} fotos neste período. Mínimo: 10."}
 
-    imagens_filtradas.sort()
+    imagens_filtradas.sort(key=lambda item: (item[0], item[1]))
+    imagens_filtradas = [caminho for _, caminho in imagens_filtradas]
 
     lista_txt = os.path.join(SYSTEM_TEMP_DIR, f"lista_ffmpeg_cam{camera_id}.txt")
     with open(lista_txt, "w") as f:
@@ -75,28 +84,30 @@ def gerar_timelapse(camera_id: int, data_inicio: str, data_fim: str, fps: int = 
 
     nome_video = f"timelapse_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{formato}"
     caminho_video = os.path.join(pasta_destino, nome_video)
-    caminho_video_tmp = os.path.join(SYSTEM_TEMP_DIR, nome_video)
+    caminho_video_tmp = os.path.join(pasta_destino, f".timelapse_tmp_{nome_video}")
 
-    comando = [
-        FFMPEG_BINARY, "-y", "-f", "concat", "-safe", "0", "-i", lista_txt,
-        "-c:v", codec, "-pix_fmt", "yuv420p", "-r", str(fps),
-        "-crf", str(crf)
-    ]
-    
+    filtros_video = [f"settb=expr=1/{fps}", "setpts=N"]
     if resolucao != "original":
         altura = resolucao.replace("p", "")
-        comando.extend(["-vf", f"scale=-2:{altura}"])
+        filtros_video.append(f"scale=-2:{altura}")
+    filtros_video.append(f"fps={fps}")
+
+    comando = [
+        FFMPEG_BINARY, "-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", lista_txt,
+        "-vf", ",".join(filtros_video), "-c:v", codec, "-pix_fmt", "yuv420p", "-r", str(fps),
+        "-crf", str(crf)
+    ]
 
     comando.append(caminho_video_tmp)
 
     try:
         resultado = subprocess.run(comando, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
         
-        if resultado.returncode == 0 and os.path.exists(caminho_video_tmp):
-            shutil.move(caminho_video_tmp, caminho_video)
+        if resultado.returncode == 0 and os.path.isfile(caminho_video_tmp) and os.path.getsize(caminho_video_tmp) > 0:
+            os.replace(caminho_video_tmp, caminho_video)
             return {"sucesso": True, "caminho_video": caminho_video, "total_frames": len(imagens_filtradas)}
             
-        return {"sucesso": False, "erro": resultado.stderr}
+        return {"sucesso": False, "erro": _resumir_erro_ffmpeg(resultado.stderr)}
     except Exception as e:
         return {"sucesso": False, "erro": str(e)}
     finally:

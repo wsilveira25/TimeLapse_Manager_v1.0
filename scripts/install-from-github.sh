@@ -1,33 +1,55 @@
 #!/usr/bin/env bash
+# Instalação pública do Timelapse Manager (Linux Debian/Ubuntu com systemd):
+#   curl -fsSL https://raw.githubusercontent.com/wsilveira25/TimeLapse_Manager_v1.0/main/scripts/install-from-github.sh | sudo bash
+# Opcional: bash install-from-github.sh [OWNER/REPOSITORY] [vX.Y.Z]
 set -euo pipefail
 
-REPOSITORY="${1:?Uso: install-from-github.sh OWNER/REPOSITORY [TAG]}"
+REPOSITORY="${1:-wsilveira25/TimeLapse_Manager_v1.0}"
 VERSION="${2:-latest}"
+
+if [[ "$(id -u)" -ne 0 ]]; then
+    printf 'Execute como root: curl -fsSL <url> | sudo bash\n' >&2
+    exit 1
+fi
+
 TEMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TEMP_ROOT"' EXIT
 
-command -v gh >/dev/null 2>&1 || {
-    printf 'Instale GitHub CLI e autentique com gh auth login para acessar o repositório privado.\n' >&2
-    exit 1
-}
-gh auth status --hostname github.com >/dev/null
-
-DOWNLOAD_ARGS=(release download)
-if [[ "$VERSION" != "latest" ]]; then
-    DOWNLOAD_ARGS+=("$VERSION")
+missing=()
+for pkg in curl python3 unzip ffmpeg; do
+    command -v "$pkg" >/dev/null 2>&1 || missing+=("$pkg")
+done
+python3 -c 'import venv, ensurepip' >/dev/null 2>&1 || missing+=(python3-venv)
+if [[ ${#missing[@]} -gt 0 ]]; then
+    command -v apt-get >/dev/null 2>&1 || { printf 'Instale manualmente: %s\n' "${missing[*]}" >&2; exit 1; }
+    DEBIAN_FRONTEND=noninteractive apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install --yes "${missing[@]}"
 fi
-DOWNLOAD_ARGS+=(--repo "$REPOSITORY" --pattern 'timelapse-manager-*.zip' --pattern 'SHA256SUMS.txt' --dir "$TEMP_ROOT")
-gh "${DOWNLOAD_ARGS[@]}"
-ARCHIVE="$(find "$TEMP_ROOT" -maxdepth 1 -type f -name 'timelapse-manager-*.zip' -print -quit)"
-[[ -n "$ARCHIVE" ]] || { printf 'A Release não contém o pacote Linux.\n' >&2; exit 1; }
+
+if [[ "$VERSION" == "latest" ]]; then
+    BASE_URL="https://github.com/$REPOSITORY/releases/latest/download"
+else
+    BASE_URL="https://github.com/$REPOSITORY/releases/download/$VERSION"
+fi
+
 SUMS="$TEMP_ROOT/SHA256SUMS.txt"
-[[ -f "$SUMS" ]] || { printf 'A Release não contém SHA256SUMS.txt.\n' >&2; exit 1; }
-EXPECTED_HASH="$(awk -v file="$(basename "$ARCHIVE")" '{ sub(/\r$/, "", $2) } $2 == file { print tolower($1); exit }' "$SUMS")"
-[[ -n "$EXPECTED_HASH" ]] || { printf 'O SHA256 do pacote não foi encontrado na Release.\n' >&2; exit 1; }
+curl -fsSL --retry 3 -o "$SUMS" "$BASE_URL/SHA256SUMS.txt"
+ARCHIVE_NAME="$(awk '{ sub(/\r$/, "", $2) } $2 ~ /^timelapse-manager-[0-9.]+\.zip$/ { print $2; exit }' "$SUMS")"
+[[ -n "$ARCHIVE_NAME" ]] || { printf 'A Release não contém o pacote Linux.\n' >&2; exit 1; }
+ARCHIVE="$TEMP_ROOT/$ARCHIVE_NAME"
+curl -fsSL --retry 3 -o "$ARCHIVE" "$BASE_URL/$ARCHIVE_NAME"
+
+EXPECTED_HASH="$(awk -v file="$ARCHIVE_NAME" '{ sub(/\r$/, "", $2) } $2 == file { print tolower($1); exit }' "$SUMS")"
 ACTUAL_HASH="$(sha256sum "$ARCHIVE" | awk '{print tolower($1)}')"
-[[ "$EXPECTED_HASH" == "$ACTUAL_HASH" ]] || { printf 'O SHA256 do pacote não corresponde ao manifesto.\n' >&2; exit 1; }
+[[ -n "$EXPECTED_HASH" && "$EXPECTED_HASH" == "$ACTUAL_HASH" ]] || { printf 'O SHA256 do pacote não corresponde ao manifesto.\n' >&2; exit 1; }
 
 unzip -q "$ARCHIVE" -d "$TEMP_ROOT"
 INSTALLER="$TEMP_ROOT/TimelapseManager/scripts/install-linux.sh"
 [[ -f "$INSTALLER" ]] || { printf 'O instalador Linux não foi encontrado no pacote.\n' >&2; exit 1; }
-bash "$INSTALLER"
+
+# As perguntas do instalador precisam do terminal, mesmo quando o script vem de um pipe.
+if [[ -r /dev/tty ]]; then
+    TIMELAPSE_UPDATE_REPO="$REPOSITORY" bash "$INSTALLER" </dev/tty
+else
+    TIMELAPSE_UPDATE_REPO="$REPOSITORY" bash "$INSTALLER"
+fi

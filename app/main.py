@@ -14,6 +14,7 @@ from starlette.middleware.sessions import SessionMiddleware
 # Importações do nosso projeto
 from app.core.database import engine, Base, SessionLocal, ensure_alert_schema, ensure_storage_config_schema, get_db
 from app.core.branding import get_developer_signature
+from app.core.oauth_urls import obter_oauth_redirect_uri
 from app.core.auth import (
     hash_password,
     load_session_secret,
@@ -55,6 +56,16 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 # Configura a pasta de templates HTML
 templates = Jinja2Templates(directory="app/templates")
+
+
+@app.get("/privacidade", response_class=HTMLResponse)
+async def pagina_privacidade(request: Request):
+    return templates.TemplateResponse(request=request, name="privacy.html", context={"request": request})
+
+
+@app.get("/termos", response_class=HTMLResponse)
+async def pagina_termos(request: Request):
+    return templates.TemplateResponse(request=request, name="terms.html", context={"request": request})
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -215,6 +226,7 @@ async def pagina_inicial(request: Request):
             "username": user.username if user else "",
             "recovery_email": (user.recovery_email or "") if user else "",
             "developer_signature": get_developer_signature(),
+            "oauth_redirect_uri": obter_oauth_redirect_uri(request),
         }
     )
 

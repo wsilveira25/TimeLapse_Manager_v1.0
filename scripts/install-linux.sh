@@ -27,6 +27,47 @@ for command in "$PYTHON_BIN" systemd-creds systemctl ffmpeg tar; do
         exit 1
     }
 done
+
+install_caddy() {
+    if command -v caddy >/dev/null 2>&1 && systemctl cat caddy.service >/dev/null 2>&1; then
+        printf 'Caddy já está instalado; preservando a configuração e o estado atuais.\n'
+        return
+    fi
+    command -v apt-get >/dev/null 2>&1 || {
+        printf 'A instalação automática do Caddy requer Debian/Ubuntu com APT. Instale-o pelo guia oficial e repita.\n' >&2
+        exit 1
+    }
+    if [[ -f /etc/os-release ]]; then
+        . /etc/os-release
+    fi
+    case "${ID:-}" in
+        debian|ubuntu|raspbian) ;;
+        *)
+            printf 'A instalação automática do Caddy está habilitada para Debian/Ubuntu. Sistema detectado: %s.\n' "${PRETTY_NAME:-desconhecido}" >&2
+            exit 1
+            ;;
+    esac
+
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install --yes debian-keyring debian-archive-keyring apt-transport-https curl gnupg
+    install -d -o root -g root -m 0755 /usr/share/keyrings
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
+        | gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
+        -o /etc/apt/sources.list.d/caddy-stable.list
+    chmod 0644 /usr/share/keyrings/caddy-stable-archive-keyring.gpg /etc/apt/sources.list.d/caddy-stable.list
+    apt-get update
+    apt-get install --yes caddy
+    command -v caddy >/dev/null 2>&1 && systemctl cat caddy.service >/dev/null 2>&1 || {
+        printf 'O pacote Caddy foi instalado, mas o binário ou caddy.service não foi encontrado.\n' >&2
+        exit 1
+    }
+    systemctl disable --now caddy.service
+    printf 'Caddy instalado pelo repositório oficial. Ele será iniciado quando o domínio for configurado.\n'
+}
+
+install_caddy
 systemd-creds setup
 
 "$PYTHON_BIN" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else "Python 3.11 ou superior é necessário")'
@@ -142,5 +183,6 @@ UNIT
 
 systemctl daemon-reload
 systemctl enable --now timelapse-manager.service
+TIMELAPSE_DATA_DIR="$DATA_ROOT" bash "$INSTALL_ROOT/scripts/update-linux.sh" --setup timelapse-manager
 printf '\nInstalado. Abra https://%s:8000 e aceite/confie no certificado local.\n' "$SERVER_HOST"
 printf 'Estado: systemctl status timelapse-manager.service\n'

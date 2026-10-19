@@ -17,7 +17,7 @@ const SETTINGS_VIEW_KEY = 'timelapse.settings.active-view';
 const CORES_DESTAQUE = new Set(['cyan', 'teal', 'amber', 'coral']);
 const FUNDOS_PAINEL = new Set(['deep-blue', 'graphite', 'forest']);
 const TEMAS = new Set(['dark', 'light']);
-const SETTINGS_VIEWS = new Set(['overview', 'cameras', 'storage', 'alerts', 'users', 'account', 'preferences']);
+const SETTINGS_VIEWS = new Set(['overview', 'cameras', 'storage', 'alerts', 'domain', 'updates', 'users', 'account', 'preferences']);
 
 function ativarViewConfiguracoes(view) {
     if (!SETTINGS_VIEWS.has(view)) return;
@@ -651,6 +651,7 @@ function atualizarProgressoBackup(status) {
     const message = document.getElementById('backup-progress-message');
     const percent = document.getElementById('backup-progress-percent');
     const count = document.getElementById('backup-progress-count');
+    const destinations = document.getElementById('backup-progress-destinations');
     if (!container || !progressBar) return;
 
     status ||= {
@@ -664,6 +665,8 @@ function atualizarProgressoBackup(status) {
     const total = Number(status.total || 0);
     const completed = Number(status.concluidos || 0);
     const value = Math.min(Math.max(Number(status.percentual || 0), 0), 100);
+    const currentDestination = (Array.isArray(status.destinos) ? status.destinos : [])
+        .find((destination) => destination.nome === status.destino_atual);
     progressBar.style.width = total === 0 && status.estado === 'executando' ? '12%' : `${value}%`;
     progressBar.setAttribute('aria-valuenow', String(value));
     progressBar.classList.toggle('progress-bar-animated', status.estado === 'executando');
@@ -673,8 +676,16 @@ function atualizarProgressoBackup(status) {
         : `${value}%`;
     if (count) {
         count.textContent = total
-            ? `${completed.toLocaleString('pt-BR')} de ${total.toLocaleString('pt-BR')} arquivos · ${Number(status.enviados || 0).toLocaleString('pt-BR')} enviados`
+            ? `${Number(currentDestination?.enviados ?? status.enviados ?? 0).toLocaleString('pt-BR')} enviados neste destino`
             : status.estado === 'executando' ? 'Preparando lista de arquivos' : 'O status é atualizado automaticamente.';
+    }
+    if (destinations) {
+        const destinationStatuses = Array.isArray(status.destinos) ? status.destinos : [];
+        destinations.innerHTML = destinationStatuses.map((destination) => `
+            <small class="text-light opacity-75">
+                ${escaparHtml(destination.nome || 'Armazenamento')} - ${Number(destination.concluidos || 0).toLocaleString('pt-BR')} de ${Number(destination.total || 0).toLocaleString('pt-BR')} arquivos - ${Number(destination.enviados || 0).toLocaleString('pt-BR')} enviados
+            </small>
+        `).join('');
     }
 
     const button = document.getElementById('btn-sync-agora');
@@ -758,7 +769,16 @@ async function carregarConfigNuvem(
         if (ativo) ativo.checked = dados.configurado && !!dados.ativo;
         if (clientId) clientId.value = dados.configurado ? dados.oauth_client_id || '' : '';
         if (clientSecret) clientSecret.value = '';
-        if (callback) callback.textContent = `${window.location.origin}/api/system/storage/oauth/callback`;
+        const callbackUrl = dados.oauth_redirect_uri
+            || document.body.dataset.oauthRedirectUri
+            || `${window.location.origin}/api/system/storage/oauth/callback`;
+        if (callback) callback.textContent = callbackUrl;
+        const redirectWarning = document.getElementById('nuvem-oauth-redirect-warning');
+        if (redirectWarning) {
+            const callbackHost = new URL(callbackUrl).hostname;
+            const isIpAddress = /^\d{1,3}(?:\.\d{1,3}){3}$/.test(callbackHost) || callbackHost.includes(':');
+            redirectWarning.classList.toggle('d-none', !isIpAddress);
+        }
         if (caminhoLabel) caminhoLabel.textContent = tipoSelecionado === 'google_drive'
             ? 'ID da pasta do Google Drive (opcional)'
             : tipoSelecionado === 'onedrive' ? 'Caminho da pasta no OneDrive'
@@ -777,7 +797,7 @@ async function carregarConfigNuvem(
 
         if (titulo) {
             titulo.innerText = podeSincronizar
-                ? `${String(tipoSelecionado).replace('_', ' ').toUpperCase()} ATIVO`
+                ? 'BACKUP ATIVO'
                 : conectado ? 'Sincronização Pausada' : oauthProvider ? 'Conta não conectada' : 'Nuvem Não Configurada';
             titulo.className = podeSincronizar ? 'fw-bold text-success mb-1' : 'fw-bold text-warning mb-1';
         }
@@ -843,6 +863,191 @@ async function carregarConfigAlertas() {
     document.getElementById('alert-camera-failure').checked = config.alert_camera_failure !== false;
     document.getElementById('alert-disk-warning').checked = config.alert_disk_warning !== false;
     document.getElementById('alert-disk-critical').checked = config.alert_disk_critical !== false;
+}
+
+let updatePollTimer = null;
+
+function definirMensagemAtualizacao(elementId, texto, classe) {
+    const element = document.getElementById(elementId);
+    if (!element) return;
+    element.className = `${elementId === 'update-status' ? '' : 'small '}${classe || ''}`.trim();
+    element.textContent = texto;
+}
+
+async function carregarAtualizacoes(forcar = false) {
+    const response = await fetch(`/api/system/update${forcar ? '?refresh=true' : ''}`);
+    const info = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(info.detail || 'Não foi possível consultar as atualizações.');
+    const running = info.status && info.status.state === 'running';
+    document.getElementById('update-current-version').textContent = info.current_version || '—';
+    document.getElementById('update-latest-version').textContent = info.latest_version || '—';
+    document.getElementById('update-auto-enabled').checked = !!info.auto_update_enabled;
+    document.getElementById('update-auto-enabled').disabled = !info.updater_installed;
+    document.getElementById('update-setup-note').hidden = info.platform !== 'linux' || info.updater_installed;
+    const notes = document.getElementById('update-notes');
+    notes.hidden = !(info.update_available && info.release_notes);
+    notes.textContent = info.release_notes || '';
+    const applyButton = document.getElementById('update-apply-button');
+    applyButton.hidden = info.platform !== 'linux';
+    applyButton.disabled = !info.update_available || !info.updater_installed || running;
+    const download = document.getElementById('update-download-link');
+    download.hidden = !(info.platform !== 'linux' && info.update_available && info.windows_installer_url);
+    if (!download.hidden) download.href = info.windows_installer_url;
+
+    if (running) {
+        definirMensagemAtualizacao('update-status', info.status.message || 'Atualizando...', 'text-warning');
+    } else if (info.status && info.status.state === 'error') {
+        definirMensagemAtualizacao('update-status', info.status.message, 'text-danger');
+    } else if (info.check_error) {
+        definirMensagemAtualizacao('update-status', info.check_error, 'text-warning');
+    } else if (info.update_available) {
+        definirMensagemAtualizacao('update-status', `Nova versão ${info.latest_version} disponível.`, 'text-info');
+    } else {
+        definirMensagemAtualizacao('update-status', 'O sistema está atualizado.', 'text-success');
+    }
+    clearTimeout(updatePollTimer);
+    if (running) updatePollTimer = setTimeout(() => carregarAtualizacoes().catch(() => acompanharReinicio()), 4000);
+    return info;
+}
+
+function acompanharReinicio() {
+    definirMensagemAtualizacao('update-status', 'Reiniciando o sistema...', 'text-warning');
+    clearTimeout(updatePollTimer);
+    updatePollTimer = setTimeout(() => carregarAtualizacoes().catch(acompanharReinicio), 4000);
+}
+
+async function aplicarAtualizacao() {
+    const button = document.getElementById('update-apply-button');
+    if (!window.confirm('Atualizar o sistema agora? O painel ficará indisponível por alguns instantes.')) return;
+    button.disabled = true;
+    try {
+        const response = await fetch('/api/system/update/apply', { method: 'POST' });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.detail || `Falha ao iniciar a atualização (HTTP ${response.status}).`);
+        definirMensagemAtualizacao('update-feedback', result.mensagem, 'text-success');
+        updatePollTimer = setTimeout(() => carregarAtualizacoes().catch(acompanharReinicio), 3000);
+    } catch (error) {
+        definirMensagemAtualizacao('update-feedback', error.message, 'text-danger');
+        button.disabled = false;
+    }
+}
+
+async function salvarAtualizacaoAutomatica(event) {
+    const checkbox = event.target;
+    try {
+        const response = await fetch('/api/system/update/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ auto_update_enabled: checkbox.checked }),
+        });
+        if (!response.ok) throw new Error('Não foi possível salvar a preferência.');
+        definirMensagemAtualizacao('update-feedback', checkbox.checked ? 'Atualização automática ativada.' : 'Atualização automática desativada.', 'text-success');
+    } catch (error) {
+        checkbox.checked = !checkbox.checked;
+        definirMensagemAtualizacao('update-feedback', error.message, 'text-danger');
+    }
+}
+
+async function carregarConfigDominio() {
+    const response = await fetch('/api/system/domain');
+    const config = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(config.detail || 'Não foi possível carregar a configuração de domínio.');
+    const domainInput = document.getElementById('domain-name');
+    const status = document.getElementById('domain-status');
+    const callback = document.getElementById('domain-oauth-callback');
+    const command = document.getElementById('domain-setup-command');
+    const provisionButton = document.getElementById('domain-provision-button');
+    const helperNote = document.getElementById('domain-helper-note');
+    if (domainInput) domainInput.value = config.domain_name || '';
+    if (callback) callback.textContent = config.oauth_redirect_uri || 'Salve um domínio para gerar o callback.';
+    if (command) {
+        command.textContent = config.domain_name
+            ? `sudo bash ${config.script_path} ${config.domain_name}`
+            : 'Salve o domínio para gerar o comando.';
+    }
+    if (provisionButton) {
+        provisionButton.disabled = !config.domain_name || !config.provisioner_installed || config.certificate_valid || config.provisioning_in_progress;
+        provisionButton.title = config.certificate_valid
+            ? 'O certificado já está válido.'
+            : config.provisioner_installed
+                ? 'Solicitar emissão automática do certificado pelo Caddy.'
+                : 'A preparação inicial pelo administrador do servidor ainda é necessária.';
+    }
+    if (helperNote) {
+        helperNote.textContent = config.provisioner_installed
+            ? config.certificate_valid
+                ? `Certificado válido${config.certificate_expires_at ? ` até ${config.certificate_expires_at}` : ''}.`
+                : 'O Caddy tentará emitir o certificado assim que DNS e portas 80/443 estiverem acessíveis.'
+            : 'Ativação inicial: execute uma vez o comando abaixo no servidor. Depois, este botão poderá gerar/renovar o certificado.';
+    }
+    if (status) {
+        status.className = config.certificate_valid
+            ? 'small text-success'
+            : config.provisioning_result === 'failed'
+                ? 'small text-danger'
+                : 'small text-warning';
+        status.textContent = config.certificate_valid
+            ? `HTTPS válido para ${config.domain_name}; o Caddy fará a renovação automática.`
+            : config.provisioning_in_progress
+                ? 'Configurando o proxy e aguardando a emissão do certificado pelo Let\'s Encrypt...'
+                : config.provisioning_result === 'failed'
+                    ? 'A configuração falhou. Confira `journalctl -u timelapse-domain-setup.service -n 100` no servidor.'
+                    : config.aplicado
+                        ? `Servidor configurado para ${config.public_url}. O Caddy ainda precisa emitir um certificado válido.`
+            : config.domain_name
+                ? 'Domínio salvo; falta executar o configurador no servidor para ativar HTTPS e a renovação automática.'
+                : 'Nenhum domínio configurado.';
+    }
+}
+
+async function gerarCertificadoDominio() {
+    const button = document.getElementById('domain-provision-button');
+    const feedback = document.getElementById('domain-feedback');
+    if (button) button.disabled = true;
+    if (feedback) {
+        feedback.className = 'small mt-3 text-light opacity-75';
+        feedback.textContent = 'Iniciando a configuração do HTTPS...';
+    }
+    try {
+        const response = await fetch('/api/system/domain/provision', { method: 'POST' });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.detail || `Falha ao iniciar a emissão (HTTP ${response.status}).`);
+        if (feedback) {
+            feedback.className = 'small mt-3 text-success';
+            feedback.textContent = `${result.mensagem} Aguarde a propagação do certificado; se a conexão atual cair, acesse https://${document.getElementById('domain-name').value.replace(/^https?:\/\//i, '').replace(/\/$/, '')}.`;
+        }
+    } catch (error) {
+        if (feedback) {
+            feedback.className = 'small mt-3 text-danger';
+            feedback.textContent = error.message || 'Não foi possível iniciar a emissão do certificado.';
+        }
+        await carregarConfigDominio().catch(() => {});
+    }
+}
+
+async function salvarConfigDominio(event) {
+    event.preventDefault();
+    const feedback = document.getElementById('domain-feedback');
+    const domainName = document.getElementById('domain-name').value.trim();
+    try {
+        const response = await fetch('/api/system/domain', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ domain_name: domainName }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.detail || `Falha ao salvar domínio (HTTP ${response.status}).`);
+        if (feedback) {
+            feedback.className = 'small mt-3 text-success';
+            feedback.textContent = result.mensagem;
+        }
+        await carregarConfigDominio();
+    } catch (error) {
+        if (feedback) {
+            feedback.className = 'small mt-3 text-danger';
+            feedback.textContent = error.message || 'Não foi possível salvar o domínio.';
+        }
+    }
 }
 
 async function salvarConfigAlertas(event) {
@@ -1252,6 +1457,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                     });
                 }
                 if (viewButton.dataset.settingsView === 'storage') carregarLocaisArmazenamento();
+                if (viewButton.dataset.settingsView === 'updates') carregarAtualizacoes().catch((error) => definirMensagemAtualizacao('update-feedback', error.message, 'text-danger'));
+                if (viewButton.dataset.settingsView === 'domain') carregarConfigDominio().catch((error) => {
+                    const feedback = document.getElementById('domain-feedback');
+                    if (feedback) {
+                        feedback.className = 'small mt-3 text-danger';
+                        feedback.textContent = error.message;
+                    }
+                });
                 return;
             }
 
@@ -1346,6 +1559,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     document.getElementById('alert-settings-form')?.addEventListener('submit', salvarConfigAlertas);
+    document.getElementById('update-check-button')?.addEventListener('click', () => carregarAtualizacoes(true).catch((error) => definirMensagemAtualizacao('update-feedback', error.message, 'text-danger')));
+    document.getElementById('update-apply-button')?.addEventListener('click', aplicarAtualizacao);
+    document.getElementById('update-auto-enabled')?.addEventListener('change', salvarAtualizacaoAutomatica);
+    document.getElementById('domain-settings-form')?.addEventListener('submit', salvarConfigDominio);
+    document.getElementById('domain-provision-button')?.addEventListener('click', gerarCertificadoDominio);
+    document.getElementById('domain-name')?.addEventListener('input', () => {
+        const button = document.getElementById('domain-provision-button');
+        if (button) button.disabled = true;
+    });
     document.getElementById('alerts-test-email')?.addEventListener('click', testarConfigAlertas);
     document.getElementById('local-storage-form')?.addEventListener('submit', (event) => {
         event.preventDefault();
@@ -1526,6 +1748,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const oauthMessages = {
             connected: 'Conta cloud conectada com sucesso.',
             quota_warning: 'Conta conectada, mas não foi possível consultar a quota agora. O painel tentará novamente automaticamente.',
+            drive_scope_missing: 'O Google não concedeu acesso ao Drive. Tente conectar novamente e marque a caixa da permissão “Ver, editar, criar e excluir apenas os arquivos do Google Drive usados com este app”.',
             denied: 'A autorização cloud foi cancelada.',
             error: 'Não foi possível concluir a autorização cloud. Verifique as credenciais e os logs do servidor.',
         };

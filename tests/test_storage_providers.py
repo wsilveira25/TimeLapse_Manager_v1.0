@@ -1,5 +1,6 @@
 import unittest
 import os
+import threading
 import tempfile
 from datetime import date
 from pathlib import Path
@@ -12,15 +13,17 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.database import Base
 from app.core.auth import hash_password, require_auth, seed_initial_admin, verify_login, verify_password
+from app.core.oauth_urls import obter_oauth_redirect_uri, validar_oauth_redirect_uri
+from app.core.oauth_urls import validar_oauth_redirect_uri
 from app.models.camera import Camera
 from app.models.storage import LocalStorageLocation, StorageBackupFile, StorageConfig, SystemSettings
 from app.models.user import SystemUser
 from app.routers import system as system_router
-from app.routers.system import LocalStorageLocationRequest
+from app.routers.system import DomainSettingsRequest, LocalStorageLocationRequest
 from app.routers import users as users_router
 from app.routers import cameras as cameras_router
 from app.routers.system import build_provider_summary, resumir_erro_backup
-from app.services import alert_service, backup_service, capture_service, cloud_storage, local_storage
+from app.services import alert_service, backup_service, capture_service, cloud_storage, local_storage, video_service
 from app.services.cloud_storage import (
     _google_error_message,
     _google_folder_for_remote_path,
@@ -31,6 +34,164 @@ from urllib3.util import connection as urllib3_connection
 
 
 class StorageProviderSummaryTests(unittest.TestCase):
+    def test_domain_settings_normalize_and_persist_valid_hostname(self):
+        engine = create_engine('sqlite:///:memory:')
+        Base.metadata.create_all(engine)
+        TestSession = sessionmaker(bind=engine)
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            system_router,
+            'DOMAIN_CONFIG_PATH',
+            Path(directory) / 'domain.env',
+        ), TestSession() as db:
+            result = system_router.salvar_config_dominio(
+                DomainSettingsRequest(domain_name='  Cam.Timelapse.Example.COM.  '),
+                db,
+            )
+            self.assertEqual(result['domain_name'], 'cam.timelapse.example.com')
+            settings = db.query(SystemSettings).filter_by(id=1).one()
+            self.assertEqual(settings.domain_name, 'cam.timelapse.example.com')
+        engine.dispose()
+
+    def test_domain_settings_reject_url_ip_and_invalid_dns_labels(self):
+        for domain_name in (
+            'http://camera.example.com',
+            'https://camera.example.com/path',
+            '192.0.2.4',
+            'camera..example.com',
+            'camera.example.com:443',
+        ):
+            with self.subTest(domain_name=domain_name), self.assertRaises(HTTPException) as error:
+                system_router.salvar_config_dominio(
+                    DomainSettingsRequest(domain_name=domain_name),
+                    Mock(),
+                )
+            self.assertEqual(error.exception.status_code, 422)
+
+    def test_domain_settings_accepts_https_url_and_trailing_root_slash(self):
+        self.assertEqual(
+            system_router.normalizar_dominio('https://Jsilveira.sys.net/'),
+            'jsilveira.sys.net',
+        )
+
+    def test_domain_provision_requires_initial_root_setup(self):
+        engine = create_engine('sqlite:///:memory:')
+        Base.metadata.create_all(engine)
+        TestSession = sessionmaker(bind=engine)
+        with TestSession() as db:
+            db.add(SystemSettings(id=1, domain_name='camera.example.test'))
+            db.commit()
+            with (
+                patch.object(system_router, 'DOMAIN_SETUP_UNIT_PATH', Path('/missing/domain.service')),
+                patch.object(system_router, 'DOMAIN_SETUP_SUDOERS_PATH', Path('/missing/domain.sudoers')),
+                self.assertRaises(HTTPException) as error,
+            ):
+                system_router.provisionar_certificado_dominio(db)
+        engine.dispose()
+        self.assertEqual(error.exception.status_code, 503)
+        self.assertIn('Execute uma vez', error.exception.detail)
+
+    def test_domain_provision_invokes_only_fixed_systemd_helper(self):
+        engine = create_engine('sqlite:///:memory:')
+        Base.metadata.create_all(engine)
+        TestSession = sessionmaker(bind=engine)
+        with tempfile.TemporaryDirectory() as directory, TestSession() as db:
+            unit_path = Path(directory) / 'domain.service'
+            sudoers_path = Path(directory) / 'domain.sudoers'
+            unit_path.touch()
+            sudoers_path.touch()
+            db.add(SystemSettings(id=1, domain_name='camera.example.test'))
+            db.commit()
+            with (
+                patch.object(system_router, 'DOMAIN_SETUP_UNIT_PATH', unit_path),
+                patch.object(system_router, 'DOMAIN_SETUP_SUDOERS_PATH', sudoers_path),
+                patch.object(system_router.subprocess, 'run', return_value=SimpleNamespace(returncode=0)) as run,
+            ):
+                result = system_router.provisionar_certificado_dominio(db)
+        engine.dispose()
+        self.assertTrue(result['sucesso'])
+        run.assert_called_once_with(
+            [system_router.SUDO_PATH, '-n', system_router.SYSTEMCTL_PATH, '--no-block', 'restart', system_router.DOMAIN_SETUP_UNIT],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+
+    def test_google_oauth_requires_drive_file_scope_in_granted_callback_scopes(self):
+        self.assertTrue(system_router.google_drive_file_scope_concedido(
+            'openid email https://www.googleapis.com/auth/drive.file'
+        ))
+        self.assertFalse(system_router.google_drive_file_scope_concedido('openid email'))
+        self.assertFalse(system_router.google_drive_file_scope_concedido(''))
+
+    def test_google_oauth_callback_clears_tokens_when_drive_scope_was_not_granted(self):
+        engine = create_engine('sqlite:///:memory:')
+        Base.metadata.create_all(engine)
+        TestSession = sessionmaker(bind=engine)
+        with TestSession() as db:
+            config = StorageConfig(
+                id=2,
+                tipo='google_drive',
+                oauth_state='state-value',
+                oauth_access_token='old-access-token',
+                oauth_refresh_token='old-refresh-token',
+                oauth_token_expires_at=123456,
+            )
+            db.add(config)
+            db.commit()
+            response = system_router.concluir_oauth(
+                request=Mock(),
+                state='state-value',
+                code='authorization-code',
+                scope='openid email',
+                db=db,
+            )
+            db.refresh(config)
+            self.assertEqual(config.oauth_access_token, '')
+            self.assertEqual(config.oauth_refresh_token, '')
+            self.assertEqual(config.oauth_token_expires_at, 0)
+            self.assertIn('drive.file', config.storage_error)
+        engine.dispose()
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers['location'], '/?storage_oauth=drive_scope_missing')
+
+    def test_successful_google_quota_check_clears_stale_storage_error(self):
+        config = SimpleNamespace(
+            tipo='google_drive',
+            oauth_client_id='client-id',
+            oauth_client_secret='client-secret',
+            oauth_refresh_token='refresh-token',
+            oauth_access_token='access-token',
+            oauth_token_expires_at=9999999999,
+            storage_error='403 Client Error: Forbidden',
+            total_bytes=0,
+            usado_bytes=0,
+            livre_bytes=0,
+            percentagem_uso=0,
+        )
+        response = Mock(ok=True)
+        response.json.return_value = {'storageQuota': {'limit': '1000', 'usage': '250'}}
+        with patch('app.services.cloud_storage.requests.get', return_value=response):
+            result = cloud_storage.get_storage_quota(config)
+
+        self.assertEqual(result, {'total_bytes': 1000, 'usado_bytes': 250})
+        self.assertEqual(config.storage_error, '')
+        self.assertEqual(config.livre_bytes, 750)
+
+    def test_validated_backup_record_clears_old_error_without_reupload(self):
+        record = SimpleNamespace(
+            backed_up_at=123456,
+            file_size=256,
+            file_mtime_ns=987654,
+            last_error='old duplicate insert error',
+        )
+        file_stat = SimpleNamespace(st_size=256, st_mtime_ns=987654)
+
+        self.assertTrue(backup_service._backup_record_matches_file(record, file_stat))
+        self.assertEqual(record.last_error, '')
+        self.assertFalse(backup_service._backup_record_matches_file(record, SimpleNamespace(st_size=257, st_mtime_ns=987654)))
+        self.assertFalse(backup_service._backup_record_matches_file(None, file_stat))
+
     def test_smtp_password_is_encrypted_and_round_trips_with_system_secret(self):
         with patch.dict(os.environ, {'TIMELAPSE_SESSION_SECRET': 'test-session-secret'}, clear=True):
             encrypted = alert_service.criptografar_senha_smtp('smtp-test-password')
@@ -317,6 +478,38 @@ class StorageProviderSummaryTests(unittest.TestCase):
                 self.assertTrue(urllib3_connection.HAS_IPV6)
         finally:
             urllib3_connection.HAS_IPV6 = original_has_ipv6
+
+    def test_oauth_redirect_uri_requires_verified_dns_and_https(self):
+        with self.assertRaisesRegex(ValueError, 'domínio DNS'):
+            validar_oauth_redirect_uri('https://191.177.235.73:8081/api/system/storage/oauth/callback')
+        with self.assertRaisesRegex(ValueError, 'HTTPS'):
+            validar_oauth_redirect_uri('http://timelapse.example.com/api/system/storage/oauth/callback')
+        with self.assertRaisesRegex(ValueError, 'exatamente'):
+            validar_oauth_redirect_uri('https://timelapse.example.com/other')
+
+        valid_uri = 'https://timelapse.example.com/api/system/storage/oauth/callback'
+        validar_oauth_redirect_uri(valid_uri)
+        request = Mock()
+        request.url_for.return_value = 'https://191.177.235.73:8081/api/system/storage/oauth/callback'
+        with patch.dict(os.environ, {'TIMELAPSE_OAUTH_REDIRECT_URI': valid_uri}):
+            self.assertEqual(obter_oauth_redirect_uri(request), valid_uri)
+
+    def test_google_drive_oauth_requests_only_file_scoped_drive_access(self):
+        scopes = cloud_storage._provider_config('google_drive')['scopes'].split()
+        self.assertIn('https://www.googleapis.com/auth/drive.file', scopes)
+        self.assertIn('openid', scopes)
+        self.assertIn('email', scopes)
+        self.assertNotIn('https://www.googleapis.com/auth/drive.metadata.readonly', scopes)
+
+    def test_oauth_redirect_uri_requires_dns_https_for_public_hosts(self):
+        with self.assertRaisesRegex(ValueError, 'Configure um domínio DNS'):
+            validar_oauth_redirect_uri('https://191.177.235.73:8081/api/system/storage/oauth/callback')
+
+        validar_oauth_redirect_uri('https://timelapse.example.com/api/system/storage/oauth/callback')
+        validar_oauth_redirect_uri('http://localhost:8000/api/system/storage/oauth/callback')
+
+        with self.assertRaisesRegex(ValueError, 'HTTPS'):
+            validar_oauth_redirect_uri('http://timelapse.example.com/api/system/storage/oauth/callback')
 
     def test_storage_status_returns_before_background_metrics_scan(self):
         engine = create_engine('sqlite:///:memory:')
@@ -816,6 +1009,249 @@ class StorageProviderSummaryTests(unittest.TestCase):
 
         self.assertFalse(result['sucesso'])
         self.assertIn('em andamento', result['erros'][0])
+
+    def test_backup_progress_counts_unique_files_and_tracks_each_destination(self):
+        engine = create_engine('sqlite:///:memory:')
+        Base.metadata.create_all(engine)
+        TestSession = sessionmaker(bind=engine)
+        with tempfile.TemporaryDirectory() as directory, TestSession() as db:
+            files = []
+            for index in range(2):
+                path = Path(directory) / f'frame_{index}.jpg'
+                path.write_bytes(b'frame')
+                os.utime(path, (1, 1))
+                files.append(path)
+            smb_config = StorageConfig(tipo='smb', nome='SMB', ativo=True, host='smb.example.test', caminho_remoto='captures')
+            drive_config = StorageConfig(tipo='google_drive', nome='Drive', ativo=True, oauth_refresh_token='refresh-token')
+            db.add_all([smb_config, drive_config])
+            db.commit()
+            for path in files:
+                stat = path.stat()
+                db.add(StorageBackupFile(
+                    storage_config_id=smb_config.id,
+                    local_path=path.name,
+                    remote_path=f'backup/{path.name}',
+                    file_size=stat.st_size,
+                    file_mtime_ns=stat.st_mtime_ns,
+                    backed_up_at=1,
+                ))
+            first_drive_stat = files[0].stat()
+            db.add(StorageBackupFile(
+                storage_config_id=drive_config.id,
+                local_path=files[0].name,
+                remote_path=f'backup/{files[0].name}',
+                file_size=first_drive_stat.st_size,
+                file_mtime_ns=first_drive_stat.st_mtime_ns,
+                backed_up_at=1,
+            ))
+            db.commit()
+            progress_updates = []
+
+            def upload_file(path, config, remote_path):
+                return {'id': f'{config.id}-{path.name}', 'size': path.stat().st_size}
+
+            with (
+                patch.object(backup_service, '_iter_backup_files', return_value=iter(files)),
+                patch.object(backup_service, 'identificar_caminho_local', side_effect=lambda path, _db: path.name),
+                patch.object(backup_service, '_remote_backup_path', return_value='backup/frame.jpg'),
+                patch.object(backup_service, 'upload_backup_file', side_effect=upload_file),
+            ):
+                result = backup_service.executar_backup_integral(db, progress_updates.append)
+
+        engine.dispose()
+        self.assertTrue(result['sucesso'])
+        self.assertEqual(result['enviados'], 1)
+        self.assertTrue(progress_updates)
+        self.assertTrue(all(update['total'] == 2 for update in progress_updates))
+        final = progress_updates[-1]
+        self.assertEqual(final['concluidos'], 2)
+        self.assertEqual(final['percentual'], 100)
+        self.assertEqual(
+            [(item['nome'], item['concluidos'], item['total'], item['enviados']) for item in final['destinos']],
+            [('Armazenamento SMB', 2, 2, 0), ('Google Drive', 2, 2, 1)],
+        )
+        smb_finished = next(
+            index for index, update in enumerate(progress_updates)
+            if update['destino_atual'] == 'Armazenamento SMB'
+            and update['destinos'][0]['concluidos'] == 2
+        )
+        drive_started = next(
+            index for index, update in enumerate(progress_updates)
+            if update['destino_atual'] == 'Google Drive'
+            and update['destinos'][1]['concluidos'] == 0
+        )
+        self.assertLess(smb_finished, drive_started)
+
+    def test_backup_uploads_files_concurrently_within_each_destination(self):
+        engine = create_engine('sqlite:///:memory:')
+        Base.metadata.create_all(engine)
+        TestSession = sessionmaker(bind=engine)
+        barrier = threading.Barrier(2)
+        with tempfile.TemporaryDirectory() as directory, TestSession() as db:
+            files = []
+            for index in range(2):
+                path = Path(directory) / f'frame_{index}.jpg'
+                path.write_bytes(b'frame')
+                os.utime(path, (1, 1))
+                files.append(path)
+            db.add(StorageConfig(tipo='smb', nome='SMB', ativo=True, host='smb.example.test', caminho_remoto='captures'))
+            db.commit()
+
+            def upload_file(path, config, remote_path):
+                barrier.wait(timeout=5)
+                return {'id': path.name, 'size': path.stat().st_size}
+
+            with (
+                patch.object(backup_service, '_iter_backup_files', return_value=iter(files)),
+                patch.object(backup_service, 'identificar_caminho_local', side_effect=lambda path, _db: path.name),
+                patch.object(backup_service, '_remote_backup_path', return_value='backup/frame.jpg'),
+                patch.object(backup_service, 'upload_backup_file', side_effect=upload_file),
+            ):
+                result = backup_service.executar_backup_integral(db)
+
+        engine.dispose()
+        self.assertTrue(result['sucesso'])
+        self.assertEqual(result['enviados'], 2)
+
+    def test_timelapse_output_is_written_on_destination_filesystem(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            frames = []
+            for index in range(10):
+                timestamp = f'20260919_{181600 + index:06d}'
+                frame = root / f'frame_{timestamp}.jpg'
+                frame.write_bytes(b'frame')
+                frames.append(str(frame))
+            destination_root = root / 'data-disk'
+            destination_root.mkdir()
+            system_temp = root / 'system-tmp'
+            system_temp.mkdir()
+
+            def fake_ffmpeg(command, **kwargs):
+                output = Path(command[-1])
+                self.assertEqual(output.parent, destination_root / 'Videos' / 'camera_1' / date.today().strftime('%d%m%Y'))
+                self.assertIn('-hide_banner', command)
+                self.assertIn('-loglevel', command)
+                concat_list = Path(command[command.index('-i') + 1])
+                concat_lines = concat_list.read_text(encoding='utf-8').splitlines()
+                self.assertEqual(sum(line.startswith("file '") for line in concat_lines), 10)
+                video_filter = command[command.index('-vf') + 1]
+                self.assertEqual(video_filter, 'settb=expr=1/60,setpts=N,scale=-2:1080,fps=60')
+                output.write_bytes(b'encoded-video')
+                return SimpleNamespace(returncode=0, stderr='')
+
+            with (
+                patch.object(video_service, 'SYSTEM_TEMP_DIR', str(system_temp)),
+                patch.object(video_service, 'escolher_local_de_captura', return_value=destination_root),
+                patch.object(video_service.subprocess, 'run', side_effect=fake_ffmpeg),
+            ):
+                result = video_service.gerar_timelapse(
+                    camera_id=1,
+                    data_inicio='2026-09-19T18:16',
+                    data_fim='2026-09-19T18:17',
+                    fps=60,
+                    resolucao='1080p',
+                    crf=18,
+                    formato='mkv',
+                    codec='libx265',
+                    caminhos_frames=frames,
+                )
+
+            output_path = Path(result['caminho_video'])
+            self.assertTrue(result['sucesso'])
+            self.assertEqual(output_path.read_bytes(), b'encoded-video')
+            self.assertFalse(list(output_path.parent.glob('.timelapse_tmp_*')))
+
+    def test_timelapse_ffmpeg_error_returns_only_last_diagnostic_lines(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            frames = []
+            for index in range(10):
+                timestamp = f'20260919_{181600 + index:06d}'
+                frame = root / f'frame_{timestamp}.jpg'
+                frame.write_bytes(b'frame')
+                frames.append(str(frame))
+            destination_root = root / 'data-disk'
+            destination_root.mkdir()
+            system_temp = root / 'system-tmp'
+            system_temp.mkdir()
+            stderr = '\n'.join([f'ffmpeg build line {index}' for index in range(30)] + ['No space left on device'])
+
+            with (
+                patch.object(video_service, 'SYSTEM_TEMP_DIR', str(system_temp)),
+                patch.object(video_service, 'escolher_local_de_captura', return_value=destination_root),
+                patch.object(video_service.subprocess, 'run', return_value=SimpleNamespace(returncode=1, stderr=stderr)),
+            ):
+                result = video_service.gerar_timelapse(
+                    camera_id=1,
+                    data_inicio='2026-09-19T18:16',
+                    data_fim='2026-09-19T18:17',
+                    fps=60,
+                    resolucao='1080p',
+                    crf=18,
+                    formato='mkv',
+                    codec='libx265',
+                    caminhos_frames=frames,
+                )
+
+        self.assertFalse(result['sucesso'])
+        self.assertIn('No space left on device', result['erro'])
+        self.assertNotIn('ffmpeg build line 0', result['erro'])
+
+    def test_timelapse_sorts_frames_by_timestamp_not_day_folder(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            october_folder = root / '01102026'
+            september_folder = root / '19092026'
+            october_folder.mkdir()
+            september_folder.mkdir()
+            frame_paths = []
+            for index in range(5):
+                frame = october_folder / f'frame_20261001_00013{index}.jpg'
+                frame.write_bytes(b'october-frame')
+                frame_paths.append(str(frame))
+            for index in range(5):
+                frame = september_folder / f'frame_20260919_18160{index}.jpg'
+                frame.write_bytes(b'september-frame')
+                frame_paths.append(str(frame))
+            destination_root = root / 'data-disk'
+            destination_root.mkdir()
+            system_temp = root / 'system-tmp'
+            system_temp.mkdir()
+            observed_frames = []
+
+            def fake_ffmpeg(command, **kwargs):
+                concat_list = Path(command[command.index('-i') + 1])
+                observed_frames.extend(
+                    line.removeprefix("file '").removesuffix("'")
+                    for line in concat_list.read_text(encoding='utf-8').splitlines()
+                    if line.startswith("file '")
+                )
+                Path(command[-1]).write_bytes(b'encoded-video')
+                return SimpleNamespace(returncode=0, stderr='')
+
+            with (
+                patch.object(video_service, 'SYSTEM_TEMP_DIR', str(system_temp)),
+                patch.object(video_service, 'escolher_local_de_captura', return_value=destination_root),
+                patch.object(video_service.subprocess, 'run', side_effect=fake_ffmpeg),
+            ):
+                result = video_service.gerar_timelapse(
+                    camera_id=1,
+                    data_inicio='2026-09-19T18:16',
+                    data_fim='2026-10-01T00:02',
+                    fps=30,
+                    resolucao='original',
+                    crf=23,
+                    formato='mkv',
+                    codec='libx264',
+                    caminhos_frames=frame_paths,
+                )
+
+        self.assertTrue(result['sucesso'])
+        timestamps = [Path(path).name.removeprefix('frame_').removesuffix('.jpg') for path in observed_frames]
+        self.assertEqual(timestamps, sorted(timestamps))
+        self.assertTrue(timestamps[0].startswith('20260919_'))
+        self.assertTrue(timestamps[-1].startswith('20261001_'))
 
     def test_google_drive_remote_path_resolves_configured_folder_from_root(self):
         config = SimpleNamespace(caminho_remoto='/TimeLapse')

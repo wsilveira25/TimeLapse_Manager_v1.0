@@ -7,6 +7,7 @@ from app.models.camera import Camera
 from app.services.alert_service import alertar_falha_captura
 from app.services.capture_service import capturar_frame_camera
 from app.services.backup_service import executar_backup_agendado
+from app.services.update_service import verificar_atualizacao_automatica
 
 scheduler = BackgroundScheduler()
 
@@ -83,3 +84,16 @@ def iniciar_agendador():
         coalesce=True,
     )
     print("[Agendador] Backup integral agendado a cada 5 minutos.")
+
+    update_job_id = "atualizacao_automatica"
+    scheduler.add_job(
+        verificar_atualizacao_automatica,
+        "cron",
+        hour=3,
+        minute=30,
+        id=update_job_id,
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    print("[Agendador] Verificação de atualizações agendada para 03:30.")

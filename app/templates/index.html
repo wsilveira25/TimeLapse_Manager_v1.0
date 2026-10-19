@@ -14,7 +14,7 @@
 </head>
 
 
-<body class="app-shell" data-accent="cyan" data-background="deep-blue" data-admin="{{ 'true' if is_admin else 'false' }}" data-username="{{ username }}">
+<body class="app-shell" data-accent="cyan" data-background="deep-blue" data-admin="{{ 'true' if is_admin else 'false' }}" data-username="{{ username }}" data-oauth-redirect-uri="{{ oauth_redirect_uri }}">
     <!-- TELA DE CARREGAMENTO (BLUR) -->
     <div id="loading-overlay" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(248, 249, 250, 0.85); backdrop-filter: blur(10px); z-index: 9999; display: flex; flex-direction: column; justify-content: center; align-items: center; transition: opacity 0.4s ease;">
         <div class="spinner-border text-primary mb-3" style="width: 3.5rem; height: 3.5rem; border-width: 0.3rem;" role="status"></div>
@@ -115,7 +115,7 @@
                                 <i class="fa-solid fa-rotate me-1"></i> Backup agora
                             </button>
                         </div>
-                        <div id="backup-progress-container" class="w-100 mt-3" aria-live="polite">
+                                <div id="backup-progress-container" class="w-100 mt-3" aria-live="polite">
                             <div class="d-flex justify-content-between align-items-center gap-2 mb-1">
                                 <small id="backup-progress-message" class="text-light text-start">Backup automático agendado a cada 5 minutos.</small>
                                 <small id="backup-progress-percent" class="text-light flex-shrink-0">--</small>
@@ -124,6 +124,7 @@
                                 <div id="backup-progress-bar" class="progress-bar bg-info" role="progressbar" style="width: 0%;" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div>
                             </div>
                             <small id="backup-progress-count" class="d-block text-light opacity-75 text-start mt-1">O status é atualizado automaticamente.</small>
+                            <div id="backup-progress-destinations" class="d-grid gap-1 mt-2 text-start" aria-label="Progresso por destino"></div>
                         </div>
                     </div>
                 </div>
@@ -172,6 +173,8 @@
                         <button class="settings-nav-button" type="button" data-settings-view="cameras"><i class="fa-solid fa-video"></i><span>Câmeras</span></button>
                         <button class="settings-nav-button" type="button" data-settings-view="storage"><i class="fa-solid fa-hard-drive"></i><span>Armazenamento e backup</span></button>
                         <button class="settings-nav-button" type="button" data-settings-view="alerts"><i class="fa-solid fa-bell"></i><span>Alertas</span></button>
+                        <button class="settings-nav-button" type="button" data-settings-view="domain"><i class="fa-solid fa-globe"></i><span>Domínio</span></button>
+                        <button class="settings-nav-button" type="button" data-settings-view="updates"><i class="fa-solid fa-cloud-arrow-down"></i><span>Atualizações</span></button>
                         <button class="settings-nav-button" type="button" data-settings-view="users"><i class="fa-solid fa-users"></i><span>Usuários</span></button>
                         <button class="settings-nav-button" type="button" data-settings-view="account"><i class="fa-solid fa-user"></i><span>Minha conta</span></button>
                         {% else %}
@@ -189,6 +192,7 @@
                             <div class="row g-3">
                                 <div class="col-md-6 col-xl-4"><article class="settings-action-card"><div class="settings-action-icon"><i class="fa-solid fa-video"></i></div><h3 class="h6">Câmeras</h3><p class="small text-light opacity-75">Gerencie as câmeras cadastradas.</p><button type="button" class="btn btn-sm btn-outline-light" data-settings-action="camera">Adicionar câmera</button></article></div>
                                 <div class="col-md-6 col-xl-4"><article class="settings-action-card"><div class="settings-action-icon"><i class="fa-solid fa-hard-drive"></i></div><h3 class="h6">Armazenamento e backup</h3><p class="small text-light opacity-75">Configure destinos e sincronização.</p><button type="button" class="btn btn-sm btn-outline-light" data-settings-action="storage">Adicionar armazenamento</button></article></div>
+                                <div class="col-md-6 col-xl-4"><article class="settings-action-card"><div class="settings-action-icon"><i class="fa-solid fa-globe"></i></div><h3 class="h6">Domínio e HTTPS</h3><p class="small text-light opacity-75">Configure o endereço público e o certificado.</p><button type="button" class="btn btn-sm btn-outline-light" data-settings-view="domain">Configurar domínio</button></article></div>
                                 <div class="col-md-6 col-xl-4"><article class="settings-action-card"><div class="settings-action-icon"><i class="fa-solid fa-palette"></i></div><h3 class="h6">Preferências</h3><p class="small text-light opacity-75">Personalize as cores e o fundo.</p><button type="button" class="btn btn-sm btn-outline-light" data-settings-view="preferences">Personalizar painel</button></article></div>
                             </div>
                         </section>
@@ -263,6 +267,58 @@
                                 </div>
                                 <div id="alerts-feedback" class="small mt-3" role="status" aria-live="polite"></div>
                             </form>
+                        </section>
+                        <section class="settings-view" data-settings-panel="domain">
+                            <div class="settings-section-heading"><h2 class="h3">Domínio e HTTPS</h2><p>Use um endereço público com certificado confiável para acessar o painel e concluir o OAuth do Google.</p></div>
+                            <form id="domain-settings-form" class="settings-action-card mb-3">
+                                <div class="row g-3 align-items-end">
+                                    <div class="col-md-8"><label class="form-label" for="domain-name">Domínio ou subdomínio</label><input class="form-control" id="domain-name" name="domain_name" inputmode="url" autocomplete="url" placeholder="camera.exemplo.com ou https://camera.exemplo.com" maxlength="253" required><small class="form-text">Pode informar o hostname ou a URL HTTPS, sem caminho ou porta personalizada.</small></div>
+                                    <div class="col-md-4"><button class="btn btn-primary w-100" type="submit"><i class="fa-solid fa-floppy-disk me-2"></i>Salvar domínio</button></div>
+                                </div>
+                                <div class="mt-3" id="domain-status" role="status" aria-live="polite"></div>
+                                <div class="mt-3"><span class="form-label d-block">Callback OAuth para o Google</span><code id="domain-oauth-callback" class="small text-break">Configure e salve um domínio.</code></div>
+                                <div class="d-flex flex-wrap align-items-center gap-3 mt-3">
+                                    <button class="btn btn-primary" type="button" id="domain-provision-button" disabled><i class="fa-solid fa-shield-halved me-2"></i>Gerar certificado HTTPS</button>
+                                    <small class="form-text" id="domain-helper-note"></small>
+                                </div>
+                                <div id="domain-feedback" class="small mt-3" role="status" aria-live="polite"></div>
+                            </form>
+                            <section class="settings-action-card">
+                                <h3 class="h5">Preparação da rede e do certificado</h3>
+                                <ol class="mb-3">
+                                    <li class="mb-2">Registre um domínio ou subdomínio com seu provedor DNS. Crie um registro <code>A</code> para o IPv4 público da rede. Só mantenha um registro <code>AAAA</code> se o servidor também for alcançável por IPv6.</li>
+                                    <li class="mb-2">No roteador, encaminhe TCP <code>80</code> e <code>443</code> para o endereço local deste servidor. Libere as mesmas portas no firewall do servidor. Não exponha a porta <code>8000</code> à Internet.</li>
+                                    <li class="mb-2">O instalador Linux instala o Caddy automaticamente. Em instalações manuais/antigas, instale-o pelo <a href="https://caddyserver.com/docs/install#debian-ubuntu-raspbian" target="_blank" rel="noopener noreferrer">guia oficial para Debian/Ubuntu</a>. Ele solicitará e renovará o certificado Let's Encrypt quando DNS e portas estiverem acessíveis.</li>
+                                    <li>Depois que o DNS estiver propagado, execute como administrador do servidor o comando abaixo para ativar o proxy HTTPS e o callback OAuth.</li>
+                                </ol>
+                                <div class="mb-2"><span class="form-label d-block">Comando de ativação</span><code id="domain-setup-command" class="small text-break">Salve o domínio para gerar o comando.</code></div>
+                                <p class="small text-warning mb-0">Se o provedor bloquear as portas de entrada ou a conexão usar CGNAT, o desafio HTTP do Let's Encrypt não funcionará. Nesse caso, será necessário um IP público/encaminhamento válido ou configurar um desafio DNS no provedor.</p>
+                            </section>
+                        </section>
+                        <section class="settings-view" data-settings-panel="updates">
+                            <div class="settings-section-heading"><h2 class="h3">Atualizações do sistema</h2><p>Verifique novas versões e atualize quando quiser, ou deixe o sistema atualizar sozinho.</p></div>
+                            <section class="settings-action-card mb-3">
+                                <div class="row g-3 align-items-center">
+                                    <div class="col-md-6"><span class="form-label d-block">Versão instalada</span><strong id="update-current-version">—</strong></div>
+                                    <div class="col-md-6"><span class="form-label d-block">Última versão disponível</span><strong id="update-latest-version">—</strong></div>
+                                </div>
+                                <div class="mt-3" id="update-status" role="status" aria-live="polite"></div>
+                                <pre id="update-notes" class="small mt-3 mb-0 text-wrap" hidden></pre>
+                                <div class="d-flex flex-wrap align-items-center gap-2 mt-3">
+                                    <button class="btn btn-outline-light" type="button" id="update-check-button"><i class="fa-solid fa-rotate me-2"></i>Verificar agora</button>
+                                    <button class="btn btn-primary" type="button" id="update-apply-button" disabled><i class="fa-solid fa-cloud-arrow-down me-2"></i>Atualizar agora</button>
+                                    <a class="btn btn-primary" id="update-download-link" href="#" target="_blank" rel="noopener noreferrer" hidden><i class="fa-brands fa-windows me-2"></i>Baixar instalador</a>
+                                </div>
+                                <div id="update-feedback" class="small mt-3" role="status" aria-live="polite"></div>
+                            </section>
+                            <section class="settings-action-card">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" role="switch" id="update-auto-enabled">
+                                    <label class="form-check-label" for="update-auto-enabled">Atualizar automaticamente</label>
+                                </div>
+                                <small class="form-text d-block mt-2">Quando ativado, o sistema verifica novas versões todo dia às 03:30 e instala sozinho. Um backup é feito antes e a versão anterior é restaurada se algo falhar. O painel reinicia por alguns instantes.</small>
+                                <div class="mt-3" id="update-setup-note" hidden><span class="form-label d-block">Ativação inicial do atualizador (uma vez, no servidor)</span><code class="small text-break">sudo bash scripts/update-linux.sh --setup</code></div>
+                            </section>
                         </section>
                         <section class="settings-view" data-settings-panel="users">
                             <div class="settings-section-heading"><h2 class="h3">Usuários</h2><p>Contas do sistema e níveis de acesso.</p></div>
@@ -559,7 +615,11 @@
                         <select class="form-select" id="gerador-fps">
                             <option value="15">15 FPS (Mais lento)</option>
                             <option value="30" selected>30 FPS (Padrão, fluido)</option>
-                            <option value="60">60 FPS (Muito rápido)</option>
+                            <option value="60">60 FPS (Rápido)</option>
+                            <option value="120">120 FPS (Muito rápido)</option>
+                            <option value="240">240 FPS (Acelerado)</option>
+                            <option value="480">480 FPS (Muito acelerado)</option>
+                            <option value="960">960 FPS (Máxima aceleração)</option>
                         </select>
                     </div>
                     <div class="mb-3">
@@ -652,8 +712,9 @@
                             <label class="form-label">OAuth Client Secret</label>
                             <input type="password" class="form-control" id="nuvem-client-secret" autocomplete="new-password">
                         </div>
-                        <p class="form-text">Cadastre exatamente este URI como Redirect URI no Google Cloud ou Microsoft Entra:</p>
+                        <p class="form-text">Cadastre exatamente este URI como Redirect URI no Google Cloud ou Microsoft Entra. Google exige domínio DNS e HTTPS válido; IP público não é aceito. O Drive terá acesso somente aos arquivos usados por este app.</p>
                         <code id="nuvem-oauth-callback" class="small text-break"></code>
+                        <div id="nuvem-oauth-redirect-warning" class="small text-warning mt-2 d-none" role="status">Este callback usa um IP literal. O Google não permitirá a conexão; configure um domínio DNS e HTTPS antes de conectar.</div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label" id="nuvem-caminho-label">Caminho Remoto (Pasta destino)</label>
@@ -705,6 +766,6 @@
     </div>
     <!-- SCRIPTS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="/static/js/main.js?v=7"></script>
+    <script src="/static/js/main.js?v=15"></script>
 </body>
 </html>
