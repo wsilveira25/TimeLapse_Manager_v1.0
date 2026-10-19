@@ -41,7 +41,7 @@ class StorageProviderSummaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(
             system_router,
             'DOMAIN_CONFIG_PATH',
-            Path(directory) / 'domain.env',
+            Path(directory).resolve() / 'domain.env',
         ), TestSession() as db:
             result = system_router.salvar_config_dominio(
                 DomainSettingsRequest(domain_name='  Cam.Timelapse.Example.COM.  '),
@@ -95,8 +95,8 @@ class StorageProviderSummaryTests(unittest.TestCase):
         Base.metadata.create_all(engine)
         TestSession = sessionmaker(bind=engine)
         with tempfile.TemporaryDirectory() as directory, TestSession() as db:
-            unit_path = Path(directory) / 'domain.service'
-            sudoers_path = Path(directory) / 'domain.sudoers'
+            unit_path = Path(directory).resolve() / 'domain.service'
+            sudoers_path = Path(directory).resolve() / 'domain.sudoers'
             unit_path.touch()
             sudoers_path.touch()
             db.add(SystemSettings(id=1, domain_name='camera.example.test'))
@@ -546,11 +546,11 @@ class StorageProviderSummaryTests(unittest.TestCase):
             db.add(camera)
             db.flush()
 
-            capture_dir = Path(root) / 'Capturas' / f'camera_{camera.id}' / '01102026'
+            capture_dir = Path(root).resolve() / 'Capturas' / f'camera_{camera.id}' / '01102026'
             capture_dir.mkdir(parents=True)
             (capture_dir / 'frame_20261001_100000.jpg').write_bytes(b'first-frame')
             (capture_dir / 'frame_20261001_110000.jpg').write_bytes(b'last-frame')
-            video_dir = Path(root) / 'Videos' / f'camera_{camera.id}' / '01102026'
+            video_dir = Path(root).resolve() / 'Videos' / f'camera_{camera.id}' / '01102026'
             video_dir.mkdir(parents=True)
             video_path = video_dir / 'timelapse_20261001_120000.mp4'
             video_path.write_bytes(b'test-video')
@@ -808,7 +808,7 @@ class StorageProviderSummaryTests(unittest.TestCase):
 
             def fake_path_stat(path, *args, **kwargs):
                 result = original_path_stat(path, *args, **kwargs)
-                if Path(path) == secondary:
+                if Path(path).resolve() == secondary.resolve():
                     return SimpleNamespace(st_dev=result.st_dev + 1)
                 return result
 
@@ -882,7 +882,7 @@ class StorageProviderSummaryTests(unittest.TestCase):
 
             def fake_path_stat(path, *args, **kwargs):
                 result = original_path_stat(path, *args, **kwargs)
-                if Path(path) == secondary:
+                if Path(path).resolve() == secondary.resolve():
                     return SimpleNamespace(st_dev=result.st_dev + 1)
                 return result
 
@@ -915,7 +915,7 @@ class StorageProviderSummaryTests(unittest.TestCase):
         Base.metadata.create_all(engine)
         TestSession = sessionmaker(bind=engine)
         with tempfile.TemporaryDirectory() as root, TestSession() as db:
-            primary = Path(root) / 'primary'
+            primary = Path(root).resolve() / 'primary'
             secondary = primary / 'disk-2'
             secondary.mkdir(parents=True)
             marker = secondary / 'keep.txt'
@@ -926,7 +926,7 @@ class StorageProviderSummaryTests(unittest.TestCase):
 
             def fake_path_stat(path, *args, **kwargs):
                 result = original_path_stat(path, *args, **kwargs)
-                if Path(path) == secondary:
+                if Path(path).resolve() == secondary.resolve():
                     return SimpleNamespace(st_dev=default_device + 1)
                 return result
 
@@ -1017,7 +1017,7 @@ class StorageProviderSummaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, TestSession() as db:
             files = []
             for index in range(2):
-                path = Path(directory) / f'frame_{index}.jpg'
+                path = Path(directory).resolve() / f'frame_{index}.jpg'
                 path.write_bytes(b'frame')
                 os.utime(path, (1, 1))
                 files.append(path)
@@ -1090,7 +1090,7 @@ class StorageProviderSummaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, TestSession() as db:
             files = []
             for index in range(2):
-                path = Path(directory) / f'frame_{index}.jpg'
+                path = Path(directory).resolve() / f'frame_{index}.jpg'
                 path.write_bytes(b'frame')
                 os.utime(path, (1, 1))
                 files.append(path)
