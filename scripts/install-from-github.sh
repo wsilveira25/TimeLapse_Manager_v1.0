@@ -22,8 +22,9 @@ done
 python3 -c 'import venv, ensurepip' >/dev/null 2>&1 || missing+=(python3-venv)
 if [[ ${#missing[@]} -gt 0 ]]; then
     command -v apt-get >/dev/null 2>&1 || { printf 'Instale manualmente: %s\n' "${missing[*]}" >&2; exit 1; }
-    DEBIAN_FRONTEND=noninteractive apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get install --yes "${missing[@]}"
+    export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1
+    apt-get update </dev/null
+    apt-get install --yes "${missing[@]}" </dev/null
 fi
 
 if [[ "$VERSION" == "latest" ]]; then

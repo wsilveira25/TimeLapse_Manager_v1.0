@@ -48,10 +48,19 @@ install_caddy() {
             ;;
     esac
 
-    export DEBIAN_FRONTEND=noninteractive
-    printf '[1/4] Instalando dependências do repositório do Caddy...\n'
-    apt-get update
-    apt-get install --yes --no-install-recommends apt-transport-https ca-certificates curl gnupg
+    export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1
+    apt_run() {
+        timeout 900 apt-get -o Dpkg::Options::=--force-confold -o Dpkg::Use-Pty=0 "$@" </dev/null
+    }
+    printf '[1/4] Verificando dependências do repositório do Caddy...\n'
+    missing_pkgs=()
+    for pkg in apt-transport-https ca-certificates curl gnupg; do
+        dpkg -s "$pkg" >/dev/null 2>&1 || missing_pkgs+=("$pkg")
+    done
+    if [[ ${#missing_pkgs[@]} -gt 0 ]]; then
+        apt_run update
+        apt_run install --yes --no-install-recommends "${missing_pkgs[@]}"
+    fi
     install -d -o root -g root -m 0755 /usr/share/keyrings
     printf '[2/4] Baixando a chave e a lista de pacotes do Caddy...\n'
     caddy_download() {
@@ -65,8 +74,8 @@ install_caddy() {
     caddy_download 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' /etc/apt/sources.list.d/caddy-stable.list
     chmod 0644 /usr/share/keyrings/caddy-stable-archive-keyring.gpg /etc/apt/sources.list.d/caddy-stable.list
     printf '[3/4] Instalando o Caddy...\n'
-    apt-get update
-    apt-get install --yes caddy
+    apt_run update
+    apt_run install --yes caddy
     command -v caddy >/dev/null 2>&1 && systemctl cat caddy.service >/dev/null 2>&1 || {
         printf 'O pacote Caddy foi instalado, mas o binário ou caddy.service não foi encontrado.\n' >&2
         exit 1
