@@ -40,6 +40,7 @@ from app.services.alert_service import (
 )
 from app.services.local_storage import (
     DEFAULT_LOCATION_ID,
+    escolher_local_de_captura,
     local_disponivel,
     listar_locais_armazenamento,
     somar_uso_locais_armazenamento,
@@ -489,6 +490,11 @@ class LocalStorageLocationRequest(BaseModel):
 @router.get("/storage/local-locations", dependencies=[Depends(require_admin)])
 def listar_destinos_locais(db: Session = Depends(get_db)):
     locations = []
+    try:
+        destino = escolher_local_de_captura()
+        destino = str(destino.resolve()) if destino else None
+    except Exception:
+        destino = None
     for location in listar_locais_armazenamento(db):
         path = Path(location["caminho"])
         mounted = location["padrao"] or local_disponivel(path)
@@ -506,6 +512,7 @@ def listar_destinos_locais(db: Session = Depends(get_db)):
         locations.append({
             **location,
             "montado": mounted,
+            "recebendo_capturas": bool(destino) and str(path.resolve()) == destino,
             "total_bytes": total,
             "livre_bytes": free,
             "erro": error,

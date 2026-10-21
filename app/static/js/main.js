@@ -590,11 +590,12 @@ async function renderizarDiscosLocais() {
             const usado = Math.max((l.total_bytes || 0) - (l.livre_bytes || 0), 0);
             const pct = l.total_bytes ? Math.round(usado / l.total_bytes * 1000) / 10 : 0;
             const cor = pct > 85 ? '#ff416c' : '#00d2ff';
+            const selo = l.recebendo_capturas ? ' <span class="badge bg-success">recebendo capturas</span>' : '';
             const estado = !l.montado ? ' · indisponível' : (l.ativo ? '' : ' · inativo');
             return `
                 <div class="mb-2">
                     <div class="d-flex justify-content-between small text-white">
-                        <span>${esc(l.nome)} <span class="opacity-75">(${esc(l.caminho)})${estado}</span></span>
+                        <span>${esc(l.nome)} <span class="opacity-75">(${esc(l.caminho)})${estado}</span>${selo}</span>
                         <span>${formatarBytes(usado)} / ${formatarBytes(l.total_bytes || 0)} · ${pct}%</span>
                     </div>
                     <div class="progress" style="height: 10px; background: rgba(0,0,0,0.4);">
