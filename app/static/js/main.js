@@ -593,14 +593,15 @@ async function renderizarDiscosLocais() {
             const selo = l.recebendo_capturas ? ' <span class="badge bg-success">recebendo capturas</span>' : '';
             const estado = !l.montado ? ' · indisponível' : (l.ativo ? '' : ' · inativo');
             return `
-                <div class="mb-2">
-                    <div class="d-flex justify-content-between small text-white">
-                        <span>${esc(l.nome)} <span class="opacity-75">(${esc(l.caminho)})${estado}</span>${selo}</span>
-                        <span>${formatarBytes(usado)} / ${formatarBytes(l.total_bytes || 0)} · ${pct}%</span>
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between align-items-center small text-white gap-2">
+                        <span>${esc(l.nome)}${estado}${selo}</span>
+                        <span class="text-nowrap">${formatarBytes(usado)} / ${formatarBytes(l.total_bytes || 0)} · ${pct}%</span>
                     </div>
-                    <div class="progress" style="height: 10px; background: rgba(0,0,0,0.4);">
+                    <div class="progress my-1" style="height: 10px; background: rgba(0,0,0,0.4);">
                         <div class="progress-bar" style="width: ${pct}%; background: ${cor};"></div>
                     </div>
+                    <div class="small opacity-75 text-white text-break" style="font-size: 0.75rem;">${esc(l.caminho)}</div>
                 </div>`;
         }).join('');
     } catch (_) {
@@ -624,7 +625,7 @@ async function carregarStatusDisco() {
             const snapshotTime = dados.metricas_atualizadas_em
                 ? ` · Atualizado às ${new Date(dados.metricas_atualizadas_em * 1000).toLocaleTimeString('pt-BR')}`
                 : metricasCalculando ? ' · Atualizando métricas...' : '';
-            resumo.innerText = `Total: ${formatarBytes(disco.total_bytes || 0)} / Livre: ${formatarBytes(disco.livre_bytes || 0)}${snapshotTime}`;
+            resumo.innerText = `Total: ${formatarBytes(disco.total_bytes || 0)} / Livre: ${formatarBytes(disco.livre_bytes || 0)}`;
         }
         const alertaDisco = document.getElementById('disco-alerta');
         if (alertaDisco) {
