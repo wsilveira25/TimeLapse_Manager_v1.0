@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Instalação pública do Timelapse Manager (Linux Debian/Ubuntu com systemd):
-#   curl -fsSL https://raw.githubusercontent.com/wsilveira25/TimeLapse_Manager_v1.0/main/scripts/install-from-github.sh | sudo bash
+#   sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/wsilveira25/TimeLapse_Manager_v1.0/main/scripts/install-from-github.sh)"
 # Opcional: bash install-from-github.sh [OWNER/REPOSITORY] [vX.Y.Z]
 set -euo pipefail
 
@@ -8,7 +8,13 @@ REPOSITORY="${1:-wsilveira25/TimeLapse_Manager_v1.0}"
 VERSION="${2:-latest}"
 
 if [[ "$(id -u)" -ne 0 ]]; then
-    printf 'Execute como root: curl -fsSL <url> | sudo bash\n' >&2
+    printf 'Execute como root: sudo bash -c "$(curl -fsSL <url>)"\n' >&2
+    exit 1
+fi
+
+# Com "curl | sudo bash" o teclado não chega ao instalador (a senha ficaria visível e as perguntas não seriam respondidas).
+if [[ ! -t 0 && -n "${SUDO_COMMAND:-}" ]]; then
+    printf 'Este comando não permite responder às perguntas do instalador.\nUse:\n\n  sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/%s/main/scripts/install-from-github.sh)"\n\n' "$REPOSITORY" >&2
     exit 1
 fi
 

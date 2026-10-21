@@ -26,7 +26,7 @@ Get-Content "$env:ProgramData\TimelapseManager\logs\timelapse-manager.log" -Tail
 Run this from a systemd-based Debian/Ubuntu distribution. The command downloads the latest public Release, verifies its SHA-256, installs missing dependencies (Python venv, FFmpeg, unzip, Caddy) and runs the installer, which asks for the admin password and host name:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/wsilveira25/TimeLapse_Manager_v1.0/main/scripts/install-from-github.sh | sudo bash
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/wsilveira25/TimeLapse_Manager_v1.0/main/scripts/install-from-github.sh)"
 ```
 
 The installer requires Python 3.11+, FFmpeg, `systemd-creds`, and `unzip`. It prompts for the admin password and host name/IP, creates a local TLS certificate if needed, and enables `timelapse-manager.service`. Credentials are encrypted by systemd. Existing credentials and the database are preserved on reinstall.
