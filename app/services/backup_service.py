@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 from app.core.database import SessionLocal
 from app.core.paths import TEMP_DIR
 from app.models.storage import StorageBackupFile, StorageConfig
-from app.services.local_storage import identificar_caminho_local, listar_locais_armazenamento, resolver_caminho_local
+from app.services.local_storage import identificar_caminho_local, local_disponivel, listar_locais_armazenamento, resolver_caminho_local
 from app.services.alert_service import alertar_espaco_disco, alertar_falha_backup
 from app.services.cloud_storage import (
     GOOGLE_API_URL,
@@ -201,7 +201,7 @@ def _iter_backup_files(db: Session):
     locations = sorted(listar_locais_armazenamento(db), key=lambda item: len(item["caminho"]), reverse=True)
     for location in locations:
         location_root = Path(location["caminho"])
-        if not location["padrao"] and not os.path.ismount(location_root):
+        if not location["padrao"] and not local_disponivel(location_root):
             continue
         for folder in ("Capturas", "Videos"):
             root = location_root / folder

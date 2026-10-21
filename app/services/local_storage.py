@@ -13,6 +13,10 @@ DEFAULT_LOCATION_ID = 0
 MIN_CAPTURE_FREE_RATIO = 0.05
 
 
+def local_disponivel(path) -> bool:
+    return os.path.isdir(path)
+
+
 def listar_locais_armazenamento(db: Session) -> list[dict]:
     default_path = TEMP_DIR.resolve()
     locations = [{
@@ -41,7 +45,7 @@ def obter_locais_ativos(db: Session) -> list[dict]:
     return [
         location
         for location in listar_locais_armazenamento(db)
-        if location["ativo"] and (location["padrao"] or os.path.ismount(location["caminho"]))
+        if location["ativo"] and (location["padrao"] or local_disponivel(location["caminho"]))
     ]
 
 
@@ -64,7 +68,7 @@ def resolver_caminho_local(local_path: str, db: Session) -> Path | None:
         if not location:
             return None
         root = Path(location.caminho).expanduser().resolve()
-        if not os.path.ismount(root):
+        if not local_disponivel(root):
             return None
         path = (root / relative_path).resolve()
         return path if root in path.parents else None
@@ -102,7 +106,7 @@ def obter_local_por_id(location_id: int, db: Session) -> dict | None:
     if not location:
         return None
     resolved_path = Path(location.caminho).expanduser().resolve()
-    if not os.path.ismount(resolved_path):
+    if not local_disponivel(resolved_path):
         return None
     return {
         "id": location.id,
@@ -119,7 +123,7 @@ def escolher_local_de_captura() -> Path | None:
         for location in obter_locais_ativos(db):
             path = Path(location["caminho"])
             try:
-                if not location["padrao"] and not os.path.ismount(path):
+                if not location["padrao"] and not local_disponivel(path):
                     continue
                 path.mkdir(parents=True, exist_ok=True)
                 if not os.access(path, os.W_OK | os.X_OK):

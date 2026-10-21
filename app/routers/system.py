@@ -40,6 +40,7 @@ from app.services.alert_service import (
 )
 from app.services.local_storage import (
     DEFAULT_LOCATION_ID,
+    local_disponivel,
     listar_locais_armazenamento,
     somar_uso_locais_armazenamento,
 )
@@ -227,7 +228,7 @@ def _calcular_status_armazenamento(db: Session):
     arquivos_jpg = []
     seen_captures = set()
     for location in sorted(listar_locais_armazenamento(db), key=lambda item: len(item["caminho"]), reverse=True):
-        if not location["padrao"] and not os.path.ismount(location["caminho"]):
+        if not location["padrao"] and not local_disponivel(location["caminho"]):
             continue
         captures_root = Path(location["caminho"]) / "Capturas"
         for root, dirs, files in os.walk(captures_root):
@@ -490,7 +491,7 @@ def listar_destinos_locais(db: Session = Depends(get_db)):
     locations = []
     for location in listar_locais_armazenamento(db):
         path = Path(location["caminho"])
-        mounted = location["padrao"] or os.path.ismount(path)
+        mounted = location["padrao"] or local_disponivel(path)
         try:
             if not mounted:
                 raise OSError("Disco não montado.")
@@ -519,22 +520,15 @@ def salvar_destino_local(dados: LocalStorageLocationRequest, db: Session = Depen
     if not nome or not raw_path.is_absolute():
         raise HTTPException(status_code=422, detail="Informe um nome e um caminho absoluto do servidor.")
     path = raw_path.resolve()
-    if not path.is_dir() or not os.path.ismount(path):
-        raise HTTPException(status_code=422, detail="O caminho precisa ser um ponto de montagem ativo.")
-    try:
-        default_path = Path(listar_locais_armazenamento(db)[0]["caminho"]).resolve()
-        path.relative_to(default_path)
-        if path == default_path:
-            raise HTTPException(status_code=422, detail="O destino principal já é gerenciado automaticamente.")
-        default_device = default_path.stat().st_dev
-        if path.stat().st_dev == default_device:
-            raise HTTPException(status_code=422, detail="O ponto de montagem precisa usar outro disco e ficar dentro do diretório principal.")
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"Monte o disco em uma pasta dentro de {default_path}.") from exc
-    except OSError as exc:
-        raise HTTPException(status_code=422, detail="Não foi possível acessar o ponto de montagem.") from exc
+    if not path.is_dir():
+        raise HTTPException(status_code=422, detail="A pasta não existe no servidor. Crie-a (ou monte o disco) antes de cadastrar.")
+    default_path = Path(listar_locais_armazenamento(db)[0]["caminho"]).resolve()
+    if path == default_path:
+        raise HTTPException(status_code=422, detail="O destino principal já é gerenciado automaticamente.")
+    if path in default_path.parents:
+        raise HTTPException(status_code=422, detail="O destino não pode conter o diretório principal de capturas.")
     if not os.access(path, os.R_OK | os.W_OK | os.X_OK):
-        raise HTTPException(status_code=422, detail="O usuário do serviço não tem leitura e escrita nesse disco.")
+        raise HTTPException(status_code=422, detail="O usuário do serviço não tem leitura e escrita nessa pasta (verifique o dono e o ReadWritePaths do systemd).")
 
     duplicate = db.query(LocalStorageLocation).filter(LocalStorageLocation.caminho == str(path)).first()
     location = db.query(LocalStorageLocation).filter(LocalStorageLocation.id == dados.id).first() if dados.id else duplicate

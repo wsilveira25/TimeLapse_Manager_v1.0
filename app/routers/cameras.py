@@ -22,7 +22,7 @@ from app.services.video_service import gerar_timelapse # <-- Importação do mot
 
 from app.services.video_service import gerar_timelapse, obter_info_frames
 from app.services.backup_service import baixar_frames_backup, buscar_frames_backup, obter_info_frames_backup
-from app.services.local_storage import identificar_caminho_local, listar_locais_armazenamento, obter_local_por_id, somar_uso_locais_armazenamento
+from app.services.local_storage import identificar_caminho_local, local_disponivel, listar_locais_armazenamento, obter_local_por_id, somar_uso_locais_armazenamento
 
 router = APIRouter(prefix="/api/cameras", tags=["Câmeras"])
 
@@ -121,7 +121,7 @@ def listar_midias_camera(camera_id: int, db: Session = Depends(get_db)):
     locations = sorted(listar_locais_armazenamento(db), key=lambda item: len(item["caminho"]), reverse=True)
     seen_frames = set()
     for location in locations:
-        if not location["padrao"] and not os.path.ismount(location["caminho"]):
+        if not location["padrao"] and not local_disponivel(location["caminho"]):
             continue
         captures_root = Path(location["caminho"]).resolve() / "Capturas" / f"camera_{camera_id}"
         if captures_root.is_dir():
@@ -158,7 +158,7 @@ def listar_midias_camera(camera_id: int, db: Session = Depends(get_db)):
     video_paths = []
     seen_videos = set()
     for location, videos_root in videos_root_paths:
-        if not location["padrao"] and not os.path.ismount(location["caminho"]):
+        if not location["padrao"] and not local_disponivel(location["caminho"]):
             continue
         if videos_root.is_dir():
             video_paths.extend(
@@ -214,7 +214,7 @@ def listar_capturas_data(camera_id: int, data: date, db: Session = Depends(get_d
         raise HTTPException(status_code=404, detail="Câmera não encontrada.")
     paths = []
     for location in listar_locais_armazenamento(db):
-        if not location["padrao"] and not os.path.ismount(location["caminho"]):
+        if not location["padrao"] and not local_disponivel(location["caminho"]):
             continue
         captures_root = Path(location["caminho"]).resolve() / "Capturas" / f"camera_{camera_id}"
         day_directory = captures_root / data.strftime("%d%m%Y")
