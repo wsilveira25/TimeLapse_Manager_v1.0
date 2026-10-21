@@ -104,8 +104,13 @@ tar -C "$SOURCE_ROOT" \
     -cf - . | tar -C "$INSTALL_ROOT" -xf -
 
 "$PYTHON_BIN" -m venv "$INSTALL_ROOT/venv"
-"$INSTALL_ROOT/venv/bin/python" -m pip install --upgrade pip
-"$INSTALL_ROOT/venv/bin/python" -m pip install -r "$INSTALL_ROOT/requirements.txt"
+printf 'Instalando dependências Python (pode levar alguns minutos)...\n'
+"$INSTALL_ROOT/venv/bin/python" -m pip install --quiet --disable-pip-version-check --upgrade pip
+"$INSTALL_ROOT/venv/bin/python" -m pip install --quiet --disable-pip-version-check -r "$INSTALL_ROOT/requirements.txt"
+printf 'Dependências instaladas.\n\n'
+printf '=== CONFIGURAÇÃO: responda às perguntas abaixo ===\n'
+printf '(a senha não aparece enquanto você digita; apenas digite e pressione Enter)\n'
+
 
 if [[ ! -f "$CREDENTIAL_ROOT/TIMELAPSE_PASSWORD" ]]; then
     read -r -s -p 'Senha inicial do admin (mínimo 12 caracteres): ' ADMIN_PASSWORD
