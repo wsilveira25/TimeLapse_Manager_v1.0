@@ -670,6 +670,7 @@ async function carregarStatusDisco() {
 
         atualizarProgressoBackup(dados.backup_progresso || null);
         renderProvedoresStorage(provedores);
+        atualizarCardNuvem(provedores);
         renderSettingsStorage(provedores);
     } catch (erro) {
         console.error('Erro ao carregar status do disco:', erro);
@@ -747,6 +748,48 @@ async function acompanharBackup(jobId) {
     return status;
 }
 
+let ultimosProvedoresNuvem = [];
+
+function atualizarCardNuvem(provedores = ultimosProvedoresNuvem) {
+    ultimosProvedoresNuvem = provedores;
+    const remotos = provedores.filter((item) => item && item.tipo !== 'local');
+    const ehOauth = (item) => ['google_drive', 'onedrive'].includes(item.tipo);
+    const prontos = remotos.filter((item) => item.ativo && (!ehOauth(item) || item.conectado));
+    const pausados = remotos.filter((item) => !prontos.includes(item) && (!ehOauth(item) || item.conectado));
+    const semConta = remotos.filter((item) => ehOauth(item) && !item.conectado);
+    const podeSincronizar = document.body.dataset.admin === 'true' && prontos.length > 0;
+
+    const titulo = document.getElementById('nuvem-titulo');
+    const resumo = document.getElementById('nuvem-desc');
+    const btnSync = document.getElementById('btn-sync-agora');
+    const iconeCaixa = document.getElementById('icon-nuvem-status');
+
+    let texto = 'Nuvem Não Configurada';
+    let descricao = 'Configure um servidor TrueNAS, Nextcloud, Google Drive ou OneDrive para backup.';
+    if (prontos.length) {
+        texto = 'BACKUP ATIVO';
+        descricao = `Enviando para: ${prontos.map((item) => item.nome).join(', ')}`;
+    } else if (pausados.length) {
+        texto = 'Sincronização Pausada';
+        descricao = `Destinos pausados: ${pausados.map((item) => item.nome).join(', ')}`;
+    } else if (semConta.length) {
+        texto = 'Conta não conectada';
+        descricao = 'Conecte sua conta nas configurações de armazenamento.';
+    }
+    if (titulo) {
+        titulo.innerText = texto;
+        titulo.className = podeSincronizar ? 'fw-bold text-success mb-1' : 'fw-bold text-warning mb-1';
+    }
+    if (resumo) resumo.innerText = descricao;
+    if (btnSync) btnSync.style.display = podeSincronizar ? 'block' : 'none';
+    if (iconeCaixa) {
+        const ok = prontos.length > 0;
+        iconeCaixa.style.boxShadow = ok ? '0 0 15px rgba(25, 135, 84, 0.4)' : '0 0 15px rgba(255, 193, 7, 0.2)';
+        iconeCaixa.classList.toggle('bg-success', ok);
+        iconeCaixa.classList.toggle('bg-primary', !ok);
+    }
+}
+
 async function carregarConfigNuvem(
     tipo = document.getElementById('nuvem-tipo')?.value,
     configId = null,
@@ -821,30 +864,7 @@ async function carregarConfigNuvem(
             : tipoSelecionado === 'onedrive' ? 'Deixe / para enviar à raiz ou informe o caminho da pasta.'
                 : tipoSelecionado === 'smb' ? 'Informe o nome publicado no servidor (ex.: capturas_timelase), sem barras.' : '';
 
-        const titulo = document.getElementById('nuvem-titulo');
-        const resumo = document.getElementById('nuvem-desc');
-        const btnSync = document.getElementById('btn-sync-agora');
-        const iconeCaixa = document.getElementById('icon-nuvem-status');
-        const conectado = oauthProvider ? !!dados.conectado : !!dados.host;
-        const podeSincronizar = document.body.dataset.admin === 'true' && !!dados.ativo && (!oauthProvider || conectado);
-
-        if (titulo) {
-            titulo.innerText = podeSincronizar
-                ? 'BACKUP ATIVO'
-                : conectado ? 'Sincronização Pausada' : oauthProvider ? 'Conta não conectada' : 'Nuvem Não Configurada';
-            titulo.className = podeSincronizar ? 'fw-bold text-success mb-1' : 'fw-bold text-warning mb-1';
-        }
-        if (resumo) {
-            resumo.innerText = oauthProvider
-                ? conectado ? 'Conta conectada; quota consultada diretamente no provedor.' : 'Salve as credenciais do aplicativo OAuth e conecte sua conta.'
-                : dados.ativo ? `Conectado a ${dados.host || 'servidor'}` : 'Configure um servidor TrueNAS ou Nextcloud para backup.';
-        }
-        if (btnSync) btnSync.style.display = podeSincronizar ? 'block' : 'none';
-        if (iconeCaixa) {
-            iconeCaixa.style.boxShadow = conectado ? '0 0 15px rgba(25, 135, 84, 0.4)' : '0 0 15px rgba(255, 193, 7, 0.2)';
-            iconeCaixa.classList.toggle('bg-success', conectado);
-            iconeCaixa.classList.toggle('bg-primary', !conectado);
-        }
+        atualizarCardNuvem();
     } catch (erro) {
         console.error('Erro ao carregar configurações de nuvem:', erro);
     }
