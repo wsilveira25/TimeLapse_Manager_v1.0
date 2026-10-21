@@ -578,6 +578,35 @@ function renderProvedoresStorage(provedores) {
     `;
 }
 
+async function renderizarDiscosLocais() {
+    const container = document.getElementById('discos-locais');
+    if (!container) return;
+    try {
+        const res = await fetch('/api/system/storage/local-locations');
+        if (!res.ok) return;
+        const locais = await res.json();
+        const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+        container.innerHTML = locais.map((l) => {
+            const usado = Math.max((l.total_bytes || 0) - (l.livre_bytes || 0), 0);
+            const pct = l.total_bytes ? Math.round(usado / l.total_bytes * 1000) / 10 : 0;
+            const cor = pct > 85 ? '#ff416c' : '#00d2ff';
+            const estado = !l.montado ? ' · indisponível' : (l.ativo ? '' : ' · inativo');
+            return `
+                <div class="mb-2">
+                    <div class="d-flex justify-content-between small text-white">
+                        <span>${esc(l.nome)} <span class="opacity-75">(${esc(l.caminho)})${estado}</span></span>
+                        <span>${formatarBytes(usado)} / ${formatarBytes(l.total_bytes || 0)} · ${pct}%</span>
+                    </div>
+                    <div class="progress" style="height: 10px; background: rgba(0,0,0,0.4);">
+                        <div class="progress-bar" style="width: ${pct}%; background: ${cor};"></div>
+                    </div>
+                </div>`;
+        }).join('');
+    } catch (_) {
+        // mantém a barra agregada
+    }
+}
+
 async function carregarStatusDisco() {
     try {
         const res = await fetch('/api/system/storage');
@@ -618,6 +647,8 @@ async function carregarStatusDisco() {
                 barra.style.boxShadow = '0 0 15px rgba(255, 65, 108, 0.5)';
             }
         }
+
+        renderizarDiscosLocais();
 
         const textoMedia = document.getElementById('texto-media-kb');
         if (textoMedia) {
