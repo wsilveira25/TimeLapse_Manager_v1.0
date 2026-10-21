@@ -208,3 +208,16 @@ systemctl enable --now timelapse-manager.service
 TIMELAPSE_DATA_DIR="$DATA_ROOT" bash "$INSTALL_ROOT/scripts/update-linux.sh" --setup timelapse-manager
 printf '\nInstalado. Abra https://%s:8000 e aceite/confie no certificado local.\n' "$SERVER_HOST"
 printf 'Estado: systemctl status timelapse-manager.service\n'
+
+PUBLIC_DOMAIN="${TIMELAPSE_DOMAIN:-}"
+if [[ -z "$PUBLIC_DOMAIN" && -t 0 ]]; then
+    printf '\nPara acesso externo com HTTPS válido (e OAuth do Google) informe o domínio já apontado para este servidor.\n'
+    read -r -p 'Domínio público (Enter para pular): ' PUBLIC_DOMAIN
+fi
+if [[ -n "$PUBLIC_DOMAIN" ]]; then
+    if bash "$INSTALL_ROOT/scripts/configure-domain.sh" "$PUBLIC_DOMAIN"; then
+        printf 'HTTPS ativado em https://%s\n' "$PUBLIC_DOMAIN"
+    else
+        printf 'Não foi possível ativar o HTTPS agora. Corrija o problema indicado e execute depois:\n  sudo bash %s/scripts/configure-domain.sh %s\n' "$INSTALL_ROOT" "$PUBLIC_DOMAIN" >&2
+    fi
+fi
