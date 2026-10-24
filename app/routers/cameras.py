@@ -17,6 +17,7 @@ from app.core.paths import TEMP_DIR
 from app.core.database import get_db
 from app.models.camera import Camera
 from app.models.storage import StorageConfig
+from app.tasks.scheduler import sincronizar_job_camera
 from app.services.onvif_service import descobrir_perfis_camera
 from app.services.video_service import gerar_timelapse # <-- Importação do motor de vídeo
 
@@ -97,6 +98,7 @@ def salvar_camera(camera: CameraCreate, db: Session = Depends(get_db)):
     db.add(nova_camera)
     db.commit()
     db.refresh(nova_camera)
+    sincronizar_job_camera(nova_camera)
     return nova_camera
 
 @router.get("/", response_model=List[CameraResponse], dependencies=[Depends(require_admin)])
@@ -328,6 +330,8 @@ def atualizar_camera(camera_id: int, dados: CameraUpdate, db: Session = Depends(
         camera.link_rtsp = dados.link_rtsp
 
     db.commit()
+    db.refresh(camera)
+    sincronizar_job_camera(camera)
     return {"sucesso": True, "mensagem": "Configurações atualizadas"}
 
 @router.delete("/{camera_id}", dependencies=[Depends(require_admin)])
@@ -337,6 +341,7 @@ def deletar_camera(camera_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Câmera não encontrada")
     db.delete(camera)
     db.commit()
+    sincronizar_job_camera(None, camera_id)
     return {"sucesso": True}
 
 # ==========================================

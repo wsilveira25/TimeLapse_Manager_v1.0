@@ -38,6 +38,28 @@ def executar_reinicio_processo():
         os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
     os.execv(sys.executable, [sys.executable, *sys.argv])
 
+def sincronizar_job_camera(cam: Camera | None, camera_id: int | None = None):
+    """Cria, atualiza ou remove o job de captura de uma câmara sem reiniciar o serviço."""
+    job_id = f'captura_cam_{camera_id if cam is None else cam.id}'
+    if scheduler.get_job(job_id):
+        scheduler.remove_job(job_id)
+    if cam is None or not cam.ativa or not cam.link_rtsp:
+        return
+    intervalo = getattr(cam, "intervalo_minutos", None)
+    if intervalo is None:
+        intervalo = getattr(cam, "intervalo_captura", 5)
+    qualidade = cam.qualidade_captura if getattr(cam, "qualidade_captura", None) is not None else 2
+    scheduler.add_job(
+        job_captura_individual,
+        'interval',
+        minutes=max(1, int(intervalo)),
+        args=[cam.id, cam.link_rtsp, int(qualidade)],
+        id=job_id,
+        replace_existing=True,
+    )
+    print(f"[Agendador] Câmara {cam.id} agendada para capturar a cada {intervalo} minuto(s).")
+
+
 def iniciar_agendador():
     """Lê todas as câmaras ativas no arranque e cria os jobs individuais."""
     print("A iniciar o Agendador de Capturas Independente...")
